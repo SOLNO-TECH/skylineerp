@@ -12,6 +12,7 @@ import {
   getUsuarioPerfil,
   createUsuario,
   updateUsuario,
+  eliminarUsuarioDefinitivo,
   existeUsuarioPorEmail,
   getAllUnidades,
   getUnidadById,
@@ -160,6 +161,27 @@ app.put('/api/perfil', requireAuth, (req, res) => {
   }
 });
 
+/** Quitar foto: POST evita proxies que no reenvían bien DELETE y devuelven HTML 404. */
+function clearPerfilAvatar(req, res) {
+  try {
+    const perfil = getUsuarioPerfil(req.user.id);
+    if (!perfil) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const ruta = (perfil.avatar || '').trim();
+    if (ruta && !ruta.includes('..') && !ruta.startsWith('/')) {
+      const abs = join(__dirname, 'uploads', ruta);
+      fs.unlink(abs, () => {});
+    }
+    updateUsuario(req.user.id, { avatar: '' }, req.user.id);
+    res.json({ perfil: getUsuarioPerfil(req.user.id) });
+  } catch (err) {
+    console.error('clearPerfilAvatar:', err);
+    res.status(500).json({ error: 'Error al quitar la foto de perfil' });
+  }
+}
+
+app.post('/api/perfil/avatar/delete', requireAuth, clearPerfilAvatar);
+app.delete('/api/perfil/avatar', requireAuth, clearPerfilAvatar);
+
 app.post('/api/perfil/avatar', requireAuth, uploadAvatar.single('avatar'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
   const ruta = `avatares/${req.file.filename}`;
@@ -278,6 +300,32 @@ app.put('/api/usuarios/:id', requireAuth, requireRole(ROLES.ADMIN), (req, res) =
     res.json({ usuario: getUsuarioByIdAdmin(id) });
   } catch (err) {
     res.status(500).json({ error: 'Error al actualizar usuario' });
+  }
+});
+
+app.post('/api/usuarios/:id/eliminar', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
+  const id = Number(req.params.id);
+  const user = getUsuarioByIdAdmin(id);
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (user.id === req.user.id) {
+    return res.status(400).json({ error: 'No puedes eliminar tu propia cuenta' });
+  }
+  if (user.activo) {
+    return res.status(400).json({ error: 'Desactiva el usuario antes de eliminarlo definitivamente' });
+  }
+  const ruta = (user.avatar || '').trim();
+  if (ruta && !ruta.includes('..') && !ruta.startsWith('/')) {
+    fs.unlink(join(__dirname, 'uploads', ruta), () => {});
+  }
+  try {
+    eliminarUsuarioDefinitivo(id, req.user.id);
+    res.json({ ok: true });
+  } catch (err) {
+    const msg = err?.message || 'Error al eliminar usuario';
+    if (err?.code === 'NOT_FOUND') return res.status(404).json({ error: msg });
+    if (err?.code === 'MUST_DEACTIVATE') return res.status(400).json({ error: msg });
+    console.error('POST /api/usuarios/:id/eliminar:', err);
+    res.status(500).json({ error: msg });
   }
 });
 

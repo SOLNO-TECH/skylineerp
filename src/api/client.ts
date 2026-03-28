@@ -157,13 +157,21 @@ export async function uploadAvatarPerfil(file: File): Promise<PerfilData> {
   form.append('avatar', file);
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}/perfil/avatar`, {
+  const res = await fetch(resolveApiUrl(`${API_BASE}/perfil/avatar`), {
     method: 'POST',
     headers,
     body: form,
   });
   const data = await parseResponse<{ perfil?: PerfilData; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al subir avatar');
+  return data.perfil!;
+}
+
+export async function deleteAvatarPerfil(): Promise<PerfilData> {
+  /** POST: algunos proxies / dev no reenvían DELETE y responden HTML (404). */
+  const res = await fetchWithAuth(`${API_BASE}/perfil/avatar/delete`, { method: 'POST' });
+  const data = await parseResponse<{ perfil?: PerfilData; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al quitar la foto de perfil');
   return data.perfil!;
 }
 
@@ -251,6 +259,13 @@ export async function deleteUsuario(id: number): Promise<void> {
   const res = await fetchWithAuth(`${API_BASE}/usuarios/${id}`, { method: 'DELETE' });
   const data = await parseResponse<{ error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al desactivar usuario');
+}
+
+/** Solo usuarios ya desactivados. Borrado permanente en BD. */
+export async function eliminarUsuarioDefinitivo(id: number): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/usuarios/${id}/eliminar`, { method: 'POST' });
+  const data = await parseResponse<{ ok?: boolean; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al eliminar usuario');
 }
 
 export async function getRoles(): Promise<string[]> {

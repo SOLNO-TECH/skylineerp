@@ -976,6 +976,46 @@ export function updateUsuario(id, data, actorId = null) {
   });
 }
 
+/**
+ * Borra el usuario de la BD. Solo si está desactivado (activo = 0).
+ * Anula FKs en auditoría / check-in / historial de rentas.
+ */
+export function eliminarUsuarioDefinitivo(id, actorId = null) {
+  const u = db
+    .prepare('SELECT id, email, nombre, activo FROM usuarios WHERE id = ?')
+    .get(Number(id));
+  if (!u) {
+    const err = new Error('Usuario no encontrado');
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+  if (u.activo) {
+    const err = new Error('Desactiva el usuario antes de eliminarlo definitivamente');
+    err.code = 'MUST_DEACTIVATE';
+    throw err;
+  }
+  const uid = Number(u.id);
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE sistema_actividad SET usuario_id = NULL WHERE usuario_id = ?').run(uid);
+    db.prepare('UPDATE checkin_out_registros SET usuario_id = NULL WHERE usuario_id = ?').run(uid);
+    db.prepare('UPDATE rentas_historial SET usuario_id = NULL WHERE usuario_id = ?').run(uid);
+    const r = db.prepare('DELETE FROM usuarios WHERE id = ? AND activo = 0').run(uid);
+    if (r.changes !== 1) {
+      throw new Error('No se pudo eliminar el usuario');
+    }
+  });
+  tx();
+  registrarSistemaActividad({
+    categoria: 'usuario',
+    accion: 'Usuario eliminado definitivamente',
+    detalle: `${u.nombre} (${u.email})`,
+    entidadTipo: 'usuario',
+    entidadId: String(uid),
+    usuarioId: actorId,
+    icon: 'mdi:account-remove',
+  });
+}
+
 export function getUsuarioPerfil(id) {
   const u = db.prepare(
     'SELECT id, email, nombre, apellidos, rfc, curp, telefono, avatar, rol, creado_en FROM usuarios WHERE id = ? AND activo = 1'

@@ -5,6 +5,7 @@ import {
   createUsuario,
   updateUsuario,
   deleteUsuario,
+  eliminarUsuarioDefinitivo,
   getRoles,
   type UsuarioRow,
 } from '../api/client';
@@ -35,6 +36,7 @@ export function Usuarios() {
   const [form, setForm] = useState({ nombre: '', email: '', password: '', rol: 'operador', activo: true });
   const [saving, setSaving] = useState(false);
   const [confirmDesactivar, setConfirmDesactivar] = useState<number | null>(null);
+  const [confirmEliminar, setConfirmEliminar] = useState<number | null>(null);
 
   function load() {
     setLoading(true);
@@ -144,6 +146,21 @@ export function Usuarios() {
       .catch((e) => {
         setError(e instanceof Error ? e.message : 'Error');
         toast(e instanceof Error ? e.message : 'Error', 'error');
+      });
+  }
+
+  function handleEliminarDefinitivo(id: number) {
+    setError(null);
+    eliminarUsuarioDefinitivo(id)
+      .then(() => {
+        toast('Usuario eliminado definitivamente');
+        load();
+        setConfirmEliminar(null);
+      })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : 'Error';
+        setError(msg);
+        toast(msg, 'error');
       });
   }
 
@@ -357,11 +374,36 @@ export function Usuarios() {
                               Desactivar
                             </button>
                           </>
+                        ) : confirmEliminar === u.id ? (
+                          <>
+                            <span className="max-w-[220px] text-right text-xs leading-snug text-gray-500">
+                              ¿Eliminar definitivamente? Esta acción no se puede deshacer.
+                            </span>
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-sm"
+                              onClick={() => setConfirmEliminar(null)}
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-outline-danger btn-sm"
+                              onClick={() => handleEliminarDefinitivo(u.id)}
+                            >
+                              <Icon icon="mdi:delete-forever-outline" className="size-4 shrink-0" aria-hidden />
+                              Eliminar
+                            </button>
+                          </>
                         ) : (
                           <>
                             <button
                               type="button"
-                              onClick={() => openEdit(u)}
+                              onClick={() => {
+                                setConfirmDesactivar(null);
+                                setConfirmEliminar(null);
+                                openEdit(u);
+                              }}
                               title="Editar usuario"
                               className="btn btn-outline btn-sm"
                             >
@@ -371,12 +413,29 @@ export function Usuarios() {
                             {u.activo && u.id !== currentUser?.id && (
                               <button
                                 type="button"
-                                onClick={() => setConfirmDesactivar(u.id)}
+                                onClick={() => {
+                                  setConfirmEliminar(null);
+                                  setConfirmDesactivar(u.id);
+                                }}
                                 title="Desactivar usuario"
                                 className="btn btn-outline-secondary btn-sm"
                               >
                                 <Icon icon="mdi:account-off-outline" className="size-4 shrink-0" aria-hidden />
                                 Desactivar
+                              </button>
+                            )}
+                            {!u.activo && u.id !== currentUser?.id && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setConfirmDesactivar(null);
+                                  setConfirmEliminar(u.id);
+                                }}
+                                title="Eliminar usuario definitivamente"
+                                className="btn btn-outline-danger btn-sm"
+                              >
+                                <Icon icon="mdi:delete-forever-outline" className="size-4 shrink-0" aria-hidden />
+                                Eliminar
                               </button>
                             )}
                           </>

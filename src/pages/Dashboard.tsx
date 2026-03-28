@@ -15,7 +15,63 @@ import {
   Legend,
 } from 'recharts';
 import { useAuth } from '../context/AuthContext';
-import { getUnidades, getActividadReciente, getRentasProximosVencimientos } from '../api/client';
+import type { User } from '../api/client';
+import {
+  getAvatarUrl,
+  getUnidades,
+  getActividadReciente,
+  getRentasProximosVencimientos,
+} from '../api/client';
+
+function welcomeDisplayName(u: User): string {
+  const n = u.nombre?.trim();
+  if (n) return n;
+  const local = u.email?.split('@')[0] ?? '';
+  if (!local) return 'Usuario';
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function userInitials(u: User): string {
+  const n = u.nombre?.trim();
+  if (n) {
+    const parts = n.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+    if (parts[0].length >= 2) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] ?? '?').toUpperCase();
+  }
+  const local = u.email?.split('@')[0] ?? '?';
+  return local.slice(0, 2).toUpperCase();
+}
+
+function DashboardWelcomeAvatar({ user }: { user: User }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [user.avatar]);
+  const src = user.avatar?.trim() ? getAvatarUrl(user.avatar.trim()) : '';
+  if (src && !imgFailed) {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="size-11 shrink-0 rounded-lg object-cover shadow-inner ring-1 ring-black/5"
+        onError={() => setImgFailed(true)}
+      />
+    );
+  }
+  return (
+    <div
+      className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-skyline-blue to-[#24478a] text-[0.8rem] font-bold tracking-tight text-white shadow-inner"
+      aria-hidden
+    >
+      {userInitials(user)}
+    </div>
+  );
+}
 
 const statConfig = [
   { label: 'Unidades disponibles', key: 'disponible' as const, icon: 'mdi:car-multiple', variant: 'disponible' },
@@ -79,7 +135,7 @@ function diasHasta(fechaStr: string): number {
 }
 
 export function Dashboard() {
-  const { hasRole } = useAuth();
+  const { hasRole, user } = useAuth();
   const [unidades, setUnidades] = useState<{ estatus: string }[]>([]);
   const [actividad, setActividad] = useState<
     { id: string; accion: string; detalle: string; fecha: string; icon: string; usuarioNombre?: string }[]
@@ -139,13 +195,27 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto w-full max-w-6xl">
-      <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-gray-900">
-          Panel de control
-        </h1>
-        <p className="mt-1 text-sm font-medium text-gray-500">
-          Resumen operativo de tu flotilla
-        </p>
+      <header className="mb-8 flex flex-col gap-5 border-b border-skyline-border/80 pb-6 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight text-[#162036]">
+            Panel de control
+          </h1>
+          <p className="mt-1 text-sm font-medium text-gray-500">
+            Resumen operativo de tu flotilla
+          </p>
+        </div>
+        {user && (
+          <div className="flex w-full shrink-0 items-center gap-3 rounded-xl border border-skyline-border bg-white px-4 py-3 shadow-sm sm:w-auto sm:max-w-md sm:py-2.5">
+            <DashboardWelcomeAvatar user={user} />
+            <div className="min-w-0 flex-1 sm:flex-initial">
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-skyline-muted">
+                Bienvenido
+              </p>
+              <p className="truncate font-semibold leading-tight text-[#162036]">{welcomeDisplayName(user)}</p>
+              <p className="truncate text-xs text-gray-500">{user.email}</p>
+            </div>
+          </div>
+        )}
       </header>
 
       <section className="mb-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Resumen de flotilla">

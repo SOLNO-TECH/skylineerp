@@ -7,6 +7,7 @@ import {
   getPerfil,
   updatePerfil,
   uploadAvatarPerfil,
+  deleteAvatarPerfil,
   getAvatarUrl,
   type PerfilData,
 } from '../api/client';
@@ -27,6 +28,7 @@ export function Perfil() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [deletingAvatar, setDeletingAvatar] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState({
@@ -117,6 +119,25 @@ export function Perfil() {
       });
   }
 
+  function handleRemoveAvatar() {
+    if (!perfil?.avatar?.trim()) return;
+    if (!confirm('¿Quitar la foto de perfil? Volverá a mostrarse la inicial de tu nombre.')) return;
+    setDeletingAvatar(true);
+    setError(null);
+    deleteAvatarPerfil()
+      .then((p) => {
+        toast('Foto de perfil eliminada');
+        setPerfil(p);
+        refreshUser();
+      })
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : 'Error';
+        setError(msg);
+        toast(msg, 'error');
+      })
+      .finally(() => setDeletingAvatar(false));
+  }
+
   if (!user) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
@@ -157,7 +178,7 @@ export function Perfil() {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingAvatar}
+                disabled={uploadingAvatar || deletingAvatar}
                 title="Cambiar foto de perfil"
                 className="relative flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-skyline-blue text-2xl font-bold text-white ring-2 ring-white ring-offset-2 transition-all hover:ring-skyline-blue hover:ring-offset-4 disabled:opacity-50"
               >
@@ -178,6 +199,20 @@ export function Perfil() {
               <div className="absolute -bottom-0.5 -right-0.5 flex size-8 items-center justify-center rounded-full border-2 border-white bg-skyline-blue shadow-md">
                 <Icon icon="mdi:camera-plus" className="size-4 text-white" aria-hidden />
               </div>
+              {perfil.avatar?.trim() && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRemoveAvatar();
+                  }}
+                  disabled={uploadingAvatar || deletingAvatar}
+                  title="Quitar foto de perfil"
+                  className="absolute -bottom-0.5 -left-0.5 flex size-8 items-center justify-center rounded-full border-2 border-white bg-white text-red-600 shadow-md transition-colors hover:bg-red-50 disabled:opacity-50"
+                >
+                  <Icon icon="mdi:trash-can-outline" className="size-4" aria-hidden />
+                </button>
+              )}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -185,7 +220,7 @@ export function Perfil() {
                 onChange={handleAvatarChange}
                 className="hidden"
               />
-              {uploadingAvatar && (
+              {(uploadingAvatar || deletingAvatar) && (
                 <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50">
                   <div className="h-6 w-6 animate-spin rounded-full border-2 border-white border-t-transparent" />
                 </div>
