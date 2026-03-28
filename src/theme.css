@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+/* SKYLINE — Tema corporativo */
+@theme {
+  --font-sans: 'Montserrat', ui-sans-serif, system-ui, sans-serif;
+  --color-skyline-blue: #2D58A7;
+  --color-skyline-blue-hover: #24478a;
+  --color-skyline-red: #E62129;
+  --color-skyline-red-hover: #c41d24;
+  --color-skyline-bg: #F8F9FA;
+  --color-skyline-border: #E9ECEF;
+  --color-skyline-muted: #6c757d;
+  --color-status-ok: #198754;
+  --color-status-renta: #0d6efd;
+  --radius: 0.375rem;
+}
+
+@layer base {
+  body {
+    @apply antialiased text-[#1a1a2e] bg-skyline-bg font-sans text-sm leading-relaxed;
+  }
+  #root {
+    @apply min-h-screen;
+  }
+  a {
+    @apply text-skyline-blue no-underline;
+  }
+  a:hover {
+    @apply underline;
+  }
+}
+
+/* Scrollbars — rojo corporativo, pill suave (Firefox + Chrome / Edge / Safari) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-skyline-red) var(--color-skyline-border);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--color-skyline-border) 55%, white);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--color-skyline-red) 0%, var(--color-skyline-red-hover) 100%);
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--color-skyline-border) 55%, white);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-skyline-red-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Utilidades que siguen usándose en componentes */
+.btn {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium rounded-md cursor-pointer transition-colors border border-transparent no-underline hover:no-underline;
+}
+.btn:disabled {
+  @apply cursor-not-allowed opacity-50 pointer-events-none;
+}
+.btn-primary {
+  @apply border-skyline-blue bg-skyline-blue text-white hover:bg-skyline-blue-hover;
+}
+.btn-primary:focus-visible {
+  @apply outline-none ring-2 ring-skyline-blue ring-offset-2;
+}
+.btn-accent {
+  @apply border-skyline-red bg-skyline-red text-white hover:bg-skyline-red-hover;
+}
+/* Secundario CRUD: borde azul corporativo, fondo blanco (listados, actualizar, editar) */
+.btn-outline {
+  @apply border-skyline-blue bg-white text-skyline-blue hover:bg-skyline-blue/10;
+}
+.btn-outline:focus-visible {
+  @apply outline-none ring-2 ring-skyline-blue/35 ring-offset-2;
+}
+/* Variante compacta para tablas y barras de acciones */
+.btn-sm {
+  @apply gap-1.5 px-2.5 py-1 text-xs font-semibold;
+}
+/* Eliminar / acciones destructivas (mismo criterio en todos los CRUD) */
+.btn-outline-danger {
+  @apply border-red-200 bg-red-50 text-red-800 hover:bg-red-100;
+}
+.btn-outline-danger:focus-visible {
+  @apply outline-none ring-2 ring-red-300 ring-offset-2;
+}
+/* Acciones neutras en fila (documentos, cerrar secundario) */
+.btn-outline-secondary {
+  @apply border-skyline-border bg-white text-gray-700 hover:border-skyline-blue hover:bg-skyline-blue/5 hover:text-skyline-blue;
+}
+.btn-outline-secondary:focus-visible {
+  @apply outline-none ring-2 ring-skyline-blue/25 ring-offset-2;
+}
+
+/* Campos de formulario (input, textarea, select) — borde visible y foco corporativo */
+.input {
+  @apply rounded-md border border-skyline-border bg-white px-3 py-2 text-sm text-[#1a1a2e] shadow-sm outline-none transition placeholder:text-gray-400;
+}
+.input:focus-visible {
+  @apply border-skyline-blue ring-2 ring-skyline-blue/25;
+}
+.input:disabled {
+  @apply cursor-not-allowed bg-gray-50 text-gray-500;
+}
+
+.badge {
+  @apply inline-flex items-center px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-wider rounded-full;
+}
+.badge-disponible {
+  @apply bg-emerald-500/15 text-emerald-600;
+}
+.badge-renta {
+  @apply bg-blue-500/15 text-blue-600;
+}
+.badge-taller {
+  @apply bg-skyline-red/10 text-skyline-red;
+}
+
+.auth-loading {
+  @apply min-h-[60vh] flex flex-col items-center justify-center gap-4 text-skyline-muted;
+}
+.auth-loading-spinner {
+  @apply w-10 h-10 border-2 border-skyline-border border-t-skyline-blue rounded-full animate-spin;
+}
+
+/* Animación ligera para menú de notificaciones */
+@keyframes notif-drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.notif-menu-open {
+  animation: notif-drop-in 0.18s ease-out forwards;
+}
+
+/* Toasts: aparición desde la zona de la campana */
+@keyframes toast-from-bell {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.toast-from-bell-item {
+  animation: toast-from-bell 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}

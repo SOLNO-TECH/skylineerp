@@ -1,0 +1,1017 @@
+import express from 'express';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import multer from 'multer';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs, { existsSync } from 'fs';
+import {
+  initDb,
+  getAllUsuarios,
+  getUsuarioByIdAdmin,
+  getUsuarioPerfil,
+  createUsuario,
+  updateUsuario,
+  existeUsuarioPorEmail,
+  getAllUnidades,
+  getUnidadById,
+  createUnidad,
+  updateUnidadDb,
+  setEstatusUnidad,
+  addUnidadDocumento,
+  addUnidadActividad,
+  addUnidadImagen,
+  deleteUnidadImagen,
+  deleteUnidad,
+  existePlacas,
+  getAllRentas,
+  getRentaById,
+  getRentasPorMes,
+  createRenta,
+  updateRenta,
+  deleteRenta,
+  addPago,
+  addRentaDocumento,
+  getAllMantenimientos,
+  getMantenimientosByUnidad,
+  createMantenimiento,
+  updateMantenimiento,
+  getActividadReciente,
+  getRentasProximosVencimientos,
+  registrarLoginUsuario,
+  getCheckinOutRegistros,
+  createCheckinOutRegistro,
+  updateCheckinOutRegistro,
+  deleteCheckinOutRegistro,
+  getAllProveedores,
+  getProveedorById,
+  createProveedor,
+  updateProveedor,
+  deleteProveedor,
+  deleteProveedorFactura,
+  createProveedorFactura,
+  addPagoProveedorFactura,
+  getReporteCuentasPorPagar,
+  getReporteProveedoresPorUnidad,
+} from './db.js';
+import { login, requireAuth, requireRole, ROLES } from './auth.js';
+import { getSoporteReply } from './soporteChat.js';
+import { generarBufferExportCrudXlsx } from './exportCatalogoCrud.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const UPLOADS_DIR = join(__dirname, 'uploads', 'unidades');
+const AVATAR_DIR = join(__dirname, 'uploads', 'avatares');
+
+initDb();
+
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(AVATAR_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = join(UPLOADS_DIR, String(req.params.id));
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = (file.originalname.match(/\.\w+$/) || ['.jpg'])[0];
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const ok = /^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype);
+    cb(null, ok);
+  },
+});
+
+const avatarStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, AVATAR_DIR);
+  },
+  filename: (req, file, cb) => {
+    const ext = (file.originalname.match(/\.\w+$/) || ['.jpg'])[0];
+    cb(null, `user-${req.user.id}${ext}`);
+  },
+});
+const uploadAvatar = multer({
+  storage: avatarStorage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const ok = /^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype);
+    cb(null, ok);
+  },
+});
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json());
+app.use('/uploads', express.static(join(__dirname, 'uploads')));
+
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email y contraseña requeridos' });
+  }
+  const result = login(email, password);
+  if (!result.success) {
+    return res.status(401).json({ error: result.error });
+  }
+  try {
+    registrarLoginUsuario(result.user.id, result.user.nombre, result.user.email);
+  } catch (e) {
+    console.error('registrarLoginUsuario:', e);
+  }
+  res.json(result);
+});
+
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  res.json({ user: req.user });
+});
+
+app.get('/api/perfil', requireAuth, (req, res) => {
+  try {
+    const perfil = getUsuarioPerfil(req.user.id);
+    if (!perfil) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ perfil });
+  } catch (err) {
+    console.error('Error GET /api/perfil:', err);
+    res.status(500).json({ error: 'Error al cargar perfil' });
+  }
+});
+
+app.put('/api/perfil', requireAuth, (req, res) => {
+  const { nombre, apellidos, rfc, curp, telefono } = req.body || {};
+  try {
+    const data = {};
+    if (nombre != null) data.nombre = String(nombre).trim();
+    if (apellidos != null) data.apellidos = String(apellidos).trim();
+    if (rfc != null) data.rfc = String(rfc).trim().toUpperCase();
+    if (curp != null) data.curp = String(curp).trim().toUpperCase();
+    if (telefono != null) data.telefono = String(telefono).trim();
+    updateUsuario(req.user.id, data, req.user.id);
+    res.json({ perfil: getUsuarioPerfil(req.user.id) });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al actualizar perfil' });
+  }
+});
+
+app.post('/api/perfil/avatar', requireAuth, uploadAvatar.single('avatar'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
+  const ruta = `avatares/${req.file.filename}`;
+  try {
+    updateUsuario(req.user.id, { avatar: ruta }, req.user.id);
+    res.json({ perfil: getUsuarioPerfil(req.user.id) });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: 'Error al subir avatar' });
+  }
+});
+
+app.post('/api/auth/logout', (_req, res) => {
+  res.json({ ok: true });
+});
+
+/** Chat de soporte interno (guía integrada, sin APIs de pago). */
+app.post('/api/soporte/chat', requireAuth, async (req, res) => {
+  try {
+    const { messages } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Se requiere al menos un mensaje' });
+    }
+    if (messages.length > 28) {
+      return res.status(400).json({ error: 'La conversación es demasiado larga; inicia de nuevo.' });
+    }
+    for (const m of messages) {
+      if (!m || typeof m !== 'object') {
+        return res.status(400).json({ error: 'Formato de mensaje inválido' });
+      }
+      if (m.role !== 'user' && m.role !== 'assistant') {
+        return res.status(400).json({ error: 'Rol de mensaje inválido' });
+      }
+      if (typeof m.content !== 'string' || m.content.trim() === '') {
+        return res.status(400).json({ error: 'El contenido del mensaje no puede estar vacío' });
+      }
+      if (m.content.length > 12000) {
+        return res.status(400).json({ error: 'Mensaje demasiado largo' });
+      }
+    }
+    if (messages[messages.length - 1].role !== 'user') {
+      return res.status(400).json({ error: 'El último mensaje debe ser del usuario' });
+    }
+    const result = await getSoporteReply(messages, req.user);
+    res.json(result);
+  } catch (err) {
+    console.error('POST /api/soporte/chat', err);
+    res.status(500).json({ error: 'No se pudo generar la respuesta de soporte' });
+  }
+});
+
+app.get('/api/roles', (_req, res) => {
+  res.json({ roles: Object.values(ROLES) });
+});
+
+/* CRUD Usuarios (solo administrador) */
+app.get('/api/usuarios', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
+  try {
+    const usuarios = getAllUsuarios();
+    res.json({ usuarios });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al listar usuarios' });
+  }
+});
+
+app.post('/api/usuarios', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
+  const { email, password, nombre, rol } = req.body || {};
+  if (!email || !password || !nombre || !rol) {
+    return res.status(400).json({ error: 'Faltan email, contraseña, nombre o rol' });
+  }
+  if (!Object.values(ROLES).includes(rol)) {
+    return res.status(400).json({ error: 'Rol no válido' });
+  }
+  if (existeUsuarioPorEmail(email)) {
+    return res.status(400).json({ error: 'Ya existe un usuario con ese email' });
+  }
+  try {
+    const hash = bcrypt.hashSync(password, 10);
+    const id = createUsuario(email, hash, nombre, rol, req.user.id);
+    const user = getUsuarioByIdAdmin(Number(id));
+    res.status(201).json({ usuario: user });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al crear usuario' });
+  }
+});
+
+app.get('/api/usuarios/:id', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
+  const user = getUsuarioByIdAdmin(Number(req.params.id));
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  res.json({ usuario: user });
+});
+
+app.put('/api/usuarios/:id', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
+  const id = Number(req.params.id);
+  const user = getUsuarioByIdAdmin(id);
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  const { nombre, apellidos, rfc, curp, telefono, rol, password, activo } = req.body || {};
+  const data = {};
+  if (nombre != null) data.nombre = nombre;
+  if (apellidos != null) data.apellidos = apellidos;
+  if (rfc != null) data.rfc = String(rfc).trim().toUpperCase();
+  if (curp != null) data.curp = String(curp).trim().toUpperCase();
+  if (telefono != null) data.telefono = telefono;
+  if (rol != null) {
+    if (!Object.values(ROLES).includes(rol)) {
+      return res.status(400).json({ error: 'Rol no válido' });
+    }
+    data.rol = rol;
+  }
+  if (password !== undefined && password !== '') {
+    data.password_hash = bcrypt.hashSync(password, 10);
+  }
+  if (activo !== undefined) data.activo = !!activo;
+  try {
+    updateUsuario(id, data, req.user.id);
+    res.json({ usuario: getUsuarioByIdAdmin(id) });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al actualizar usuario' });
+  }
+});
+
+app.delete('/api/usuarios/:id', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
+  const id = Number(req.params.id);
+  const user = getUsuarioByIdAdmin(id);
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (user.id === req.user.id) {
+    return res.status(400).json({ error: 'No puedes desactivar tu propio usuario' });
+  }
+  try {
+    updateUsuario(id, { activo: false }, req.user.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al desactivar usuario' });
+  }
+});
+
+/* CRUD Unidades (autenticado) */
+app.get('/api/unidades', requireAuth, (req, res) => {
+  try {
+    const unidades = getAllUnidades();
+    res.json({ unidades });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al listar unidades' });
+  }
+});
+
+app.get('/api/unidades/:id', requireAuth, (req, res) => {
+  const unidad = getUnidadById(req.params.id);
+  if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
+  res.json({ unidad });
+});
+
+app.post('/api/unidades', requireAuth, (req, res) => {
+  const { placas, marca, modelo, estatus, kilometraje, combustiblePct, observaciones } = req.body || {};
+  if (!placas || !marca || !modelo) {
+    return res.status(400).json({ error: 'Placas, marca y modelo son requeridos' });
+  }
+  if (existePlacas(placas)) {
+    return res.status(400).json({ error: 'Ya existe una unidad con esas placas' });
+  }
+  try {
+    const unidad = createUnidad({ placas, marca, modelo, estatus, kilometraje, combustiblePct, observaciones }, req.user.id);
+    res.status(201).json({ unidad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al crear unidad' });
+  }
+});
+
+app.put('/api/unidades/:id', requireAuth, (req, res) => {
+  const id = req.params.id;
+  const unidad = getUnidadById(id);
+  if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
+  const { placas, marca, modelo, estatus, kilometraje, combustiblePct, observaciones } = req.body || {};
+  if (placas != null && existePlacas(placas, Number(id))) {
+    return res.status(400).json({ error: 'Ya existe otra unidad con esas placas' });
+  }
+  try {
+    const updated = updateUnidadDb(
+      id,
+      {
+        placas,
+        marca,
+        modelo,
+        estatus,
+        kilometraje,
+        combustiblePct,
+        observaciones,
+      },
+      req.user.id
+    );
+    res.json({ unidad: updated });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al actualizar unidad' });
+  }
+});
+
+app.patch('/api/unidades/:id/estatus', requireAuth, (req, res) => {
+  const { estatus } = req.body || {};
+  if (!estatus) return res.status(400).json({ error: 'Estatus requerido' });
+  try {
+    const unidad = setEstatusUnidad(req.params.id, estatus, req.user.id);
+    if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada o estatus inválido' });
+    res.json({ unidad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al actualizar estatus' });
+  }
+});
+
+app.post('/api/unidades/:id/documentos', requireAuth, (req, res) => {
+  const { tipo, nombre } = req.body || {};
+  if (!tipo || !nombre) return res.status(400).json({ error: 'Tipo y nombre del documento requeridos' });
+  try {
+    const unidad = addUnidadDocumento(req.params.id, tipo, nombre, req.user.id);
+    if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
+    res.status(201).json({ unidad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al agregar documento' });
+  }
+});
+
+app.post('/api/unidades/:id/actividad', requireAuth, (req, res) => {
+  const { accion, detalle, icon } = req.body || {};
+  if (!accion || !detalle) return res.status(400).json({ error: 'Acción y detalle requeridos' });
+  try {
+    const unidad = addUnidadActividad(req.params.id, accion, detalle, icon, req.user.id);
+    if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
+    res.status(201).json({ unidad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al registrar actividad' });
+  }
+});
+
+app.post('/api/unidades/:id/imagenes', requireAuth, upload.single('imagen'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
+  const descripcion = (req.body.descripcion || '').trim();
+  const ruta = `unidades/${req.params.id}/${req.file.filename}`;
+  try {
+    const unidad = addUnidadImagen(req.params.id, req.file.originalname, ruta, descripcion, req.user.id);
+    if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
+    res.status(201).json({ unidad });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: 'Error al subir imagen' });
+  }
+});
+
+app.delete('/api/unidades/:id/imagenes/:imgId', requireAuth, (req, res) => {
+  try {
+    const result = deleteUnidadImagen(req.params.imgId, req.user.id);
+    if (!result) return res.status(404).json({ error: 'Imagen no encontrada' });
+    const filePath = join(__dirname, 'uploads', result.ruta);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    const unidad = getUnidadById(req.params.id);
+    res.json({ unidad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al eliminar imagen' });
+  }
+});
+
+app.delete('/api/unidades/:id', requireAuth, (req, res) => {
+  try {
+    const ok = deleteUnidad(req.params.id, req.user.id);
+    if (!ok) return res.status(404).json({ error: 'Unidad no encontrada' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /api/unidades/:id', err);
+    res.status(500).json({
+      error: err?.message ? `Error al eliminar unidad: ${err.message}` : 'Error al eliminar unidad',
+    });
+  }
+});
+
+/* Actividad reciente y vencimientos */
+app.get('/api/actividad', requireAuth, (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 15, 500);
+    const actividad = getActividadReciente(limit);
+    res.json({ actividad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar actividad' });
+  }
+});
+
+app.get('/api/checkin-out', requireAuth, (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 80, 200);
+    const registros = getCheckinOutRegistros(limit);
+    res.json({ registros });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar registros' });
+  }
+});
+
+app.post('/api/checkin-out', requireAuth, (req, res) => {
+  const body = req.body || {};
+  try {
+    const row = createCheckinOutRegistro(
+      {
+        tipo: body.tipo,
+        unidadId: body.unidadId,
+        rentaId: body.rentaId || null,
+        colaboradorNombre: body.colaboradorNombre,
+        colaboradorRol: body.colaboradorRol,
+        kilometraje: body.kilometraje,
+        combustiblePct: body.combustiblePct,
+        checklist: body.checklist,
+        observaciones: body.observaciones,
+      },
+      req.user.id
+    );
+    if (!row) return res.status(400).json({ error: 'Datos inválidos o unidad/renta no coincide' });
+    res.status(201).json({ registro: row });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar check-in/out' });
+  }
+});
+
+app.put('/api/checkin-out/:id', requireAuth, (req, res) => {
+  const body = req.body || {};
+  try {
+    const row = updateCheckinOutRegistro(
+      req.params.id,
+      {
+        tipo: body.tipo,
+        unidadId: body.unidadId,
+        rentaId: body.rentaId || null,
+        colaboradorNombre: body.colaboradorNombre,
+        colaboradorRol: body.colaboradorRol,
+        kilometraje: body.kilometraje,
+        combustiblePct: body.combustiblePct,
+        checklist: body.checklist,
+        observaciones: body.observaciones,
+      },
+      req.user.id
+    );
+    if (!row) return res.status(400).json({ error: 'No se pudo actualizar el registro' });
+    res.json({ registro: row });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar check-in/out' });
+  }
+});
+
+app.delete('/api/checkin-out/:id', requireAuth, (req, res) => {
+  try {
+    const ok = deleteCheckinOutRegistro(req.params.id, req.user.id);
+    if (!ok) return res.status(404).json({ error: 'Registro no encontrado' });
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar' });
+  }
+});
+
+/* Geocodificación Nominatim: el navegador no puede enviar User-Agent válido (política de uso OSM). */
+const NOMINATIM_UA = 'SkylineERP/1.0 (gestión de rentas; contacto: soporte interno)';
+
+app.get('/api/geocode', requireAuth, async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (!q || q.length > 500) {
+    return res.status(400).json({ error: 'Dirección inválida' });
+  }
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=1`;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': NOMINATIM_UA,
+        'Accept-Language': 'es',
+      },
+    });
+    if (!r.ok) {
+      return res.status(502).json({ error: 'Geocodificación no disponible' });
+    }
+    const data = await r.json();
+    const hit = Array.isArray(data) ? data[0] : null;
+    if (hit?.lat != null && hit?.lon != null) {
+      return res.json({ lat: parseFloat(hit.lat), lon: parseFloat(hit.lon) });
+    }
+    return res.json({ lat: null, lon: null });
+  } catch (err) {
+    console.error('geocode', err);
+    return res.status(502).json({ error: 'Error de red' });
+  }
+});
+
+app.get('/api/reverse-geocode', requireAuth, async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lon = parseFloat(req.query.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return res.status(400).json({ error: 'Coordenadas inválidas' });
+  }
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2`;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': NOMINATIM_UA,
+        'Accept-Language': 'es',
+      },
+    });
+    if (!r.ok) {
+      return res.status(502).json({ error: 'Geocodificación no disponible' });
+    }
+    const data = await r.json();
+    const name = data?.display_name;
+    return res.json({ displayName: name ? String(name) : null });
+  } catch (err) {
+    console.error('reverse-geocode', err);
+    return res.status(502).json({ error: 'Error de red' });
+  }
+});
+
+app.get('/api/rentas/vencimientos', requireAuth, (req, res) => {
+  try {
+    const dias = Math.min(parseInt(req.query.dias, 10) || 14, 60);
+    const rentas = getRentasProximosVencimientos(dias);
+    res.json({ rentas });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar vencimientos' });
+  }
+});
+
+/* CRUD Rentas */
+app.get('/api/rentas', requireAuth, (req, res) => {
+  try {
+    const rentas = getAllRentas();
+    res.json({ rentas });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al listar rentas' });
+  }
+});
+
+app.get('/api/rentas/calendario', requireAuth, (req, res) => {
+  const ano = parseInt(req.query.ano, 10);
+  const mes = parseInt(req.query.mes, 10);
+  if (isNaN(ano) || isNaN(mes) || mes < 1 || mes > 12) {
+    return res.status(400).json({ error: 'Parámetros año y mes inválidos' });
+  }
+  try {
+    const rentas = getRentasPorMes(ano, mes);
+    res.json({ rentas });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar calendario' });
+  }
+});
+
+app.get('/api/rentas/:id', requireAuth, (req, res) => {
+  const renta = getRentaById(req.params.id);
+  if (!renta) return res.status(404).json({ error: 'Renta no encontrada' });
+  res.json({ renta });
+});
+
+app.post('/api/rentas', requireAuth, (req, res) => {
+  const body = req.body || {};
+  const data = {
+    unidadId: body.unidadId,
+    clienteNombre: body.clienteNombre,
+    clienteTelefono: body.clienteTelefono || '',
+    clienteEmail: body.clienteEmail || '',
+    fechaInicio: body.fechaInicio,
+    fechaFin: body.fechaFin,
+    monto: body.monto || 0,
+    deposito: body.deposito || 0,
+    observaciones: body.observaciones || '',
+    tipoServicio: body.tipoServicio || 'solo_renta',
+    ubicacionEntrega: body.ubicacionEntrega || '',
+    ubicacionRecoleccion: body.ubicacionRecoleccion || '',
+    precioBase: body.precioBase,
+    extras: body.extras,
+    operadorAsignado: body.operadorAsignado || '',
+    refrigerado: body.refrigerado,
+    maquinaria: body.maquinaria,
+  };
+  try {
+    const renta = createRenta(data, req.user.id);
+    if (!renta) return res.status(400).json({ error: 'Datos inválidos o unidad no disponible' });
+    res.status(201).json({ renta });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al crear renta' });
+  }
+});
+
+app.put('/api/rentas/:id', requireAuth, (req, res) => {
+  const renta = getRentaById(req.params.id);
+  if (!renta) return res.status(404).json({ error: 'Renta no encontrada' });
+  const body = req.body || {};
+  const data = {};
+  if (body.unidadId != null) data.unidadId = body.unidadId;
+  if (body.clienteNombre != null) data.clienteNombre = body.clienteNombre;
+  if (body.clienteTelefono != null) data.clienteTelefono = body.clienteTelefono;
+  if (body.clienteEmail != null) data.clienteEmail = body.clienteEmail;
+  if (body.fechaInicio != null) data.fechaInicio = body.fechaInicio;
+  if (body.fechaFin != null) data.fechaFin = body.fechaFin;
+  if (body.estado != null) data.estado = body.estado;
+  if (body.monto != null) data.monto = body.monto;
+  if (body.deposito != null) data.deposito = body.deposito;
+  if (body.observaciones != null) data.observaciones = body.observaciones;
+  if (body.tipoServicio != null) data.tipoServicio = body.tipoServicio;
+  if (body.ubicacionEntrega != null) data.ubicacionEntrega = body.ubicacionEntrega;
+  if (body.ubicacionRecoleccion != null) data.ubicacionRecoleccion = body.ubicacionRecoleccion;
+  if (body.estadoLogistico != null) data.estadoLogistico = body.estadoLogistico;
+  if (body.precioBase != null) data.precioBase = body.precioBase;
+  if (body.extras != null) data.extras = body.extras;
+  if (body.operadorAsignado != null) data.operadorAsignado = body.operadorAsignado;
+  if (body.refrigerado != null) data.refrigerado = body.refrigerado;
+  if (body.maquinaria != null) data.maquinaria = body.maquinaria;
+  try {
+    const updated = updateRenta(req.params.id, data, req.user.id);
+    res.json({ renta: updated });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al actualizar renta' });
+  }
+});
+
+app.delete('/api/rentas/:id', requireAuth, (req, res) => {
+  try {
+    const ok = deleteRenta(req.params.id, req.user.id);
+    if (!ok) return res.status(404).json({ error: 'Renta no encontrada' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al eliminar renta' });
+  }
+});
+
+app.post('/api/rentas/:id/pagos', requireAuth, (req, res) => {
+  const body = req.body || {};
+  try {
+    const result = addPago(
+      req.params.id,
+      {
+        monto: body.monto,
+        tipo: body.tipo || 'pago_parcial',
+        metodo: body.metodo || 'efectivo',
+        fecha: body.fecha,
+        referencia: body.referencia,
+        observaciones: body.observaciones,
+      },
+      req.user.id
+    );
+    if (!result) return res.status(404).json({ error: 'Renta no encontrada' });
+    const renta = getRentaById(req.params.id);
+    res.status(201).json({ pago: result, renta });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al registrar pago' });
+  }
+});
+
+const RENTA_DOCS_DIR = join(__dirname, 'uploads', 'rentas');
+fs.mkdirSync(RENTA_DOCS_DIR, { recursive: true });
+const rentaDocStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = join(RENTA_DOCS_DIR, String(req.params.id));
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = (file.originalname.match(/\.\w+$/) || ['.pdf'])[0];
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const uploadRentaDoc = multer({
+  storage: rentaDocStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const ok = /^application\/(pdf|msword)|^image\//i.test(file.mimetype) || /\.(pdf|doc|docx|jpg|jpeg|png)$/i.test(file.originalname);
+    cb(null, !!ok);
+  },
+});
+
+app.post('/api/rentas/:id/documentos', requireAuth, uploadRentaDoc.single('documento'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se envió ningún documento' });
+  const tipo = (req.body.tipo || 'contrato').trim();
+  const nombre = (req.body.nombre || req.file.originalname).trim();
+  const ruta = `rentas/${req.params.id}/${req.file.filename}`;
+  try {
+    const result = addRentaDocumento(req.params.id, tipo, nombre, ruta, req.user.id);
+    if (!result) return res.status(404).json({ error: 'Renta no encontrada' });
+    const renta = getRentaById(req.params.id);
+    res.status(201).json({ renta });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: 'Error al subir documento' });
+  }
+});
+
+/* Mantenimiento */
+app.get('/api/mantenimiento', requireAuth, (req, res) => {
+  try {
+    const mantenimientos = getAllMantenimientos();
+    res.json({ mantenimientos });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al listar mantenimientos' });
+  }
+});
+
+app.get('/api/unidades/:id/mantenimiento', requireAuth, (req, res) => {
+  try {
+    const mantenimientos = getMantenimientosByUnidad(req.params.id);
+    res.json({ mantenimientos });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar historial de mantenimiento' });
+  }
+});
+
+app.post('/api/mantenimiento', requireAuth, (req, res) => {
+  const body = req.body || {};
+  try {
+    const mantenimiento = createMantenimiento(
+      {
+        unidadId: body.unidadId,
+        tipo: body.tipo || 'preventivo',
+        descripcion: body.descripcion || '',
+        costo: body.costo || 0,
+        fechaInicio: body.fechaInicio,
+        fechaFin: body.fechaFin,
+        estado: body.estado || 'programado',
+      },
+      req.user.id
+    );
+    if (!mantenimiento) return res.status(400).json({ error: 'Datos inválidos' });
+    res.status(201).json({ mantenimiento });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al crear mantenimiento' });
+  }
+});
+
+app.put('/api/mantenimiento/:id', requireAuth, (req, res) => {
+  const body = req.body || {};
+  try {
+    const mantenimiento = updateMantenimiento(
+      req.params.id,
+      {
+        tipo: body.tipo,
+        descripcion: body.descripcion,
+        costo: body.costo,
+        fechaInicio: body.fechaInicio,
+        fechaFin: body.fechaFin,
+        estado: body.estado,
+      },
+      req.user.id
+    );
+    if (!mantenimiento) return res.status(404).json({ error: 'Mantenimiento no encontrado' });
+    res.json({ mantenimiento });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al actualizar mantenimiento' });
+  }
+});
+
+/* Proveedores y cuentas por pagar */
+const PROVEEDOR_FACTURAS_DIR = join(__dirname, 'uploads', 'proveedores');
+fs.mkdirSync(PROVEEDOR_FACTURAS_DIR, { recursive: true });
+const proveedorFacturaStorage = multer.diskStorage({
+  destination: (req, _file, cb) => {
+    const dir = join(PROVEEDOR_FACTURAS_DIR, String(req.params.id));
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = (file.originalname.match(/\.\w+$/) || ['.pdf'])[0].toLowerCase();
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const uploadProveedorFactura = multer({
+  storage: proveedorFacturaStorage,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const name = (file.originalname || '').toLowerCase();
+    const ok =
+      /^application\/(pdf|xml|octet-stream)/i.test(file.mimetype) ||
+      /^text\/xml/i.test(file.mimetype) ||
+      /\.(pdf|xml)$/i.test(name);
+    cb(null, !!ok);
+  },
+});
+
+const proveedoresHandlers = [requireAuth, requireRole(ROLES.ADMIN, ROLES.SUPERVISOR)];
+
+/** Excel multihoja: volcado de tablas CRUD (sin contraseñas). Administrador y supervisor. */
+app.get('/api/reportes/export-crud-xlsx', ...proveedoresHandlers, async (req, res) => {
+  try {
+    const desde = typeof req.query.desde === 'string' ? req.query.desde.trim() : '';
+    const hasta = typeof req.query.hasta === 'string' ? req.query.hasta.trim() : '';
+    const buf = await generarBufferExportCrudXlsx({ desde, hasta });
+    const d = new Date().toISOString().slice(0, 10);
+    const suffix = [desde || null, hasta || null].filter(Boolean).join('_a_');
+    const safeSuffix = suffix ? `-${suffix.replace(/[^\d_a-zA-Z-]/g, '')}` : '';
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="skyline-catalogo-crud${safeSuffix}-${d}.xlsx"`
+    );
+    res.send(buf);
+  } catch (err) {
+    console.error('export-crud-xlsx', err);
+    res.status(500).json({ error: 'No se pudo generar el archivo Excel' });
+  }
+});
+
+app.get('/api/proveedores/reportes/cuentas-pagar', ...proveedoresHandlers, (_req, res) => {
+  try {
+    res.json(getReporteCuentasPorPagar());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al generar reporte' });
+  }
+});
+
+app.get('/api/proveedores/reportes/por-unidad', ...proveedoresHandlers, (_req, res) => {
+  try {
+    res.json({ unidades: getReporteProveedoresPorUnidad() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al generar reporte' });
+  }
+});
+
+app.get('/api/proveedores', ...proveedoresHandlers, (_req, res) => {
+  try {
+    res.json({ proveedores: getAllProveedores() });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al listar proveedores' });
+  }
+});
+
+app.get('/api/proveedores/:id', ...proveedoresHandlers, (req, res) => {
+  try {
+    const p = getProveedorById(req.params.id);
+    if (!p) return res.status(404).json({ error: 'Proveedor no encontrado' });
+    res.json({ proveedor: p });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar proveedor' });
+  }
+});
+
+app.post('/api/proveedores', ...proveedoresHandlers, (req, res) => {
+  const body = req.body || {};
+  try {
+    const p = createProveedor(body, req.user.id);
+    if (!p) return res.status(400).json({ error: 'Nombre o razón social requerido' });
+    res.status(201).json({ proveedor: p });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al crear proveedor' });
+  }
+});
+
+app.put('/api/proveedores/:id', ...proveedoresHandlers, (req, res) => {
+  try {
+    const p = updateProveedor(req.params.id, req.body || {}, req.user.id);
+    if (!p) return res.status(404).json({ error: 'Proveedor no encontrado' });
+    res.json({ proveedor: p });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al actualizar proveedor' });
+  }
+});
+
+app.post(
+  '/api/proveedores/:id/facturas',
+  ...proveedoresHandlers,
+  uploadProveedorFactura.single('archivo'),
+  (req, res) => {
+    const body = req.body || {};
+    let archivoRuta = '';
+    let archivoNombreOriginal = '';
+    if (req.file) {
+      archivoRuta = `proveedores/${req.params.id}/${req.file.filename}`;
+      archivoNombreOriginal = req.file.originalname || '';
+    }
+    try {
+      const result = createProveedorFactura(
+        req.params.id,
+        {
+          numero: body.numero,
+          fechaEmision: body.fechaEmision,
+          montoTotal: body.montoTotal,
+          concepto: body.concepto,
+          unidadId: body.unidadId || null,
+          archivoRuta,
+          archivoNombreOriginal,
+        },
+        req.user.id
+      );
+      if (!result) {
+        if (req.file?.path) fs.unlink(req.file.path, () => {});
+        return res.status(400).json({ error: 'Datos de factura inválidos' });
+      }
+      if (result.error === 'duplicate_numero') {
+        if (req.file?.path) fs.unlink(req.file.path, () => {});
+        return res.status(409).json({ error: 'Ya existe una factura con ese número para este proveedor' });
+      }
+      if (result.error === 'unidad_invalida') {
+        if (req.file?.path) fs.unlink(req.file.path, () => {});
+        return res.status(400).json({ error: 'La unidad indicada no existe' });
+      }
+      res.status(201).json({ proveedor: result });
+    } catch (err) {
+      if (req.file?.path) fs.unlink(req.file.path, () => {});
+      console.error(err);
+      res.status(500).json({ error: 'Error al registrar factura' });
+    }
+  }
+);
+
+app.post('/api/proveedores/:id/facturas/:facturaId/pagos', ...proveedoresHandlers, (req, res) => {
+  try {
+    const p = addPagoProveedorFactura(req.params.id, req.params.facturaId, req.body || {}, req.user.id);
+    if (!p) return res.status(404).json({ error: 'Factura no encontrada' });
+    res.status(201).json({ proveedor: p });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al registrar pago' });
+  }
+});
+
+app.delete('/api/proveedores/:id/facturas/:facturaId', ...proveedoresHandlers, (req, res) => {
+  try {
+    const p = deleteProveedorFactura(req.params.id, req.params.facturaId, req.user.id);
+    if (!p) return res.status(404).json({ error: 'Factura no encontrada' });
+    res.json({ proveedor: p });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar factura' });
+  }
+});
+
+app.delete('/api/proveedores/:id', ...proveedoresHandlers, (req, res) => {
+  try {
+    const ok = deleteProveedor(req.params.id, req.user.id);
+    if (!ok) return res.status(404).json({ error: 'Proveedor no encontrado' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al desactivar proveedor' });
+  }
+});
+
+/** Frontend compilado (Vite `dist/`) junto al servidor: mismo origen para /api y sin VITE_API_ROOT. */
+const distPath = join(__dirname, '..', 'dist');
+if (existsSync(distPath)) {
+  app.use(express.static(distPath, { index: false }));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ error: 'Ruta no encontrada' });
+    }
+    if (req.path.startsWith('/uploads')) {
+      return res.status(404).send('Not found');
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return next();
+    }
+    res.sendFile(join(distPath, 'index.html'));
+  });
+}
+
+app.listen(PORT, () => {
+  console.log(`Servidor SKYLINE ERP en http://localhost:${PORT}`);
+});
