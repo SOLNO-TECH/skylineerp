@@ -27,7 +27,7 @@ Si no ves un menú, tu rol puede no incluir ese módulo: pide a un **administrad
   {
     keys: ['check', 'check-in', 'checkin', 'checkout', 'check-out', 'entrega', 'recepción', 'colaborador', 'inventario', 'ódom', 'odomet', 'combustible'],
     titulo: 'Check-in y Check-out',
-    cuerpo: `En **Check-in / Check-out** (/checkinout) registras entregas y recepciones de unidades: eliges unidad, renta si aplica, colaborador, kilometraje/combustible e inventario de material según el tipo de unidad (incluye ítems extra para refrigerado o maquinaria en el formulario). Los registros aparecen en la tabla; puedes **Editar** o **Borrar** si tu rol lo permite. Si solo ves lectura, tu rol es de consulta.`,
+    cuerpo: `En **Check-in / Check-out** (/checkinout) registras movimientos con inspección por modalidad, **fotos o videos** como evidencia, checklist de **documentos** (circulación, físico-mecánica, formato check-in o check-out, orden de salida) y observaciones. En la tabla puedes **Editar** o **Borrar** según tu rol.`,
   },
   {
     keys: ['mantenimiento', 'servicio', 'taller', 'reparación', 'reparacion'],

@@ -68,7 +68,14 @@ import {
   addClienteDocumento,
   deleteClienteDocumento,
 } from './db.js';
-import { login, requireAuth, requireRole, ROLES } from './auth.js';
+import {
+  login,
+  requireAuth,
+  requireRole,
+  requireAccesoClientes,
+  requireEdicionFlota,
+  ROLES,
+} from './auth.js';
 import { getSoporteReply } from './soporteChat.js';
 import { generarBufferExportCrudXlsx } from './exportCatalogoCrud.js';
 
@@ -212,10 +219,14 @@ const checkinFotoStorage = multer.diskStorage({
 });
 const uploadCheckinFoto = multer({
   storage: checkinFotoStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 80 * 1024 * 1024 },
   fileFilter: (_, file, cb) => {
-    const ok = /^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype);
-    cb(null, ok);
+    const mime = (file.mimetype || '').toLowerCase();
+    const ok =
+      /^image\/(jpeg|png|gif|webp)$/i.test(mime) ||
+      /^video\/(mp4|webm|quicktime|ogg)$/i.test(mime) ||
+      /\.(mp4|webm|mov|ogv|ogg)$/i.test(file.originalname || '');
+    cb(null, !!ok);
   },
 });
 
@@ -478,7 +489,7 @@ app.get('/api/unidades/:id', requireAuth, (req, res) => {
   res.json({ unidad });
 });
 
-app.post('/api/unidades', requireAuth, (req, res) => {
+app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
   const body = req.body || {};
   const {
     placas, marca, modelo, estatus, subestatusDisponible, ubicacionDisponible,
@@ -528,7 +539,7 @@ app.post('/api/unidades', requireAuth, (req, res) => {
   }
 });
 
-app.put('/api/unidades/:id', requireAuth, (req, res) => {
+app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
   const id = req.params.id;
   const unidad = getUnidadById(id);
   if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
@@ -572,7 +583,7 @@ app.put('/api/unidades/:id', requireAuth, (req, res) => {
   }
 });
 
-app.patch('/api/unidades/:id/estatus', requireAuth, (req, res) => {
+app.patch('/api/unidades/:id/estatus', requireAuth, requireEdicionFlota, (req, res) => {
   const { estatus } = req.body || {};
   if (!estatus) return res.status(400).json({ error: 'Estatus requerido' });
   try {
@@ -584,7 +595,7 @@ app.patch('/api/unidades/:id/estatus', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/unidades/:id/documentos', requireAuth, (req, res) => {
+app.post('/api/unidades/:id/documentos', requireAuth, requireEdicionFlota, (req, res) => {
   try {
     const tipo = String(req.body?.tipo ?? '').trim();
     const nombreArchivo = String(req.body?.nombreArchivo ?? req.body?.nombre ?? '').trim();
@@ -610,7 +621,7 @@ app.post('/api/unidades/:id/documentos', requireAuth, (req, res) => {
   }
 });
 
-app.delete('/api/unidades/:id/documentos/:docId', requireAuth, (req, res) => {
+app.delete('/api/unidades/:id/documentos/:docId', requireAuth, requireEdicionFlota, (req, res) => {
   try {
     const deleted = deleteUnidadDocumento(req.params.docId, req.user.id);
     if (!deleted || String(deleted.unidadId) !== String(req.params.id)) {
@@ -628,7 +639,7 @@ app.delete('/api/unidades/:id/documentos/:docId', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/unidades/:id/actividad', requireAuth, (req, res) => {
+app.post('/api/unidades/:id/actividad', requireAuth, requireEdicionFlota, (req, res) => {
   const { accion, detalle, icon } = req.body || {};
   if (!accion || !detalle) return res.status(400).json({ error: 'Acción y detalle requeridos' });
   try {
@@ -640,7 +651,7 @@ app.post('/api/unidades/:id/actividad', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/unidades/:id/imagenes', requireAuth, upload.single('imagen'), (req, res) => {
+app.post('/api/unidades/:id/imagenes', requireAuth, requireEdicionFlota, upload.single('imagen'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
   const descripcion = (req.body.descripcion || '').trim();
   const ruta = `unidades/${req.params.id}/${req.file.filename}`;
@@ -654,7 +665,7 @@ app.post('/api/unidades/:id/imagenes', requireAuth, upload.single('imagen'), (re
   }
 });
 
-app.delete('/api/unidades/:id/imagenes/:imgId', requireAuth, (req, res) => {
+app.delete('/api/unidades/:id/imagenes/:imgId', requireAuth, requireEdicionFlota, (req, res) => {
   try {
     const result = deleteUnidadImagen(req.params.imgId, req.user.id);
     if (!result) return res.status(404).json({ error: 'Imagen no encontrada' });
@@ -667,7 +678,7 @@ app.delete('/api/unidades/:id/imagenes/:imgId', requireAuth, (req, res) => {
   }
 });
 
-app.delete('/api/unidades/:id', requireAuth, (req, res) => {
+app.delete('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
   try {
     const ok = deleteUnidad(req.params.id, req.user.id);
     if (!ok) return res.status(404).json({ error: 'Unidad no encontrada' });
@@ -768,7 +779,7 @@ app.delete('/api/checkin-out/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/checkin-out/:id/imagenes', requireAuth, uploadCheckinFoto.single('imagen'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
+  if (!req.file) return res.status(400).json({ error: 'No se envió ningún archivo de imagen o video' });
   const descripcion = (req.body.descripcion || '').trim();
   const ruta = `checkin-out/${req.params.id}/${req.file.filename}`;
   try {
@@ -900,7 +911,7 @@ app.get('/api/rentas/:id', requireAuth, (req, res) => {
   res.json({ renta });
 });
 
-app.post('/api/rentas', requireAuth, (req, res) => {
+app.post('/api/rentas', requireAuth, requireEdicionFlota, (req, res) => {
   const body = req.body || {};
   const data = {
     unidadId: body.unidadId,
@@ -931,7 +942,7 @@ app.post('/api/rentas', requireAuth, (req, res) => {
   }
 });
 
-app.put('/api/rentas/:id', requireAuth, (req, res) => {
+app.put('/api/rentas/:id', requireAuth, requireEdicionFlota, (req, res) => {
   const renta = getRentaById(req.params.id);
   if (!renta) return res.status(404).json({ error: 'Renta no encontrada' });
   const body = req.body || {};
@@ -966,7 +977,7 @@ app.put('/api/rentas/:id', requireAuth, (req, res) => {
   }
 });
 
-app.delete('/api/rentas/:id', requireAuth, (req, res) => {
+app.delete('/api/rentas/:id', requireAuth, requireEdicionFlota, (req, res) => {
   try {
     const ok = deleteRenta(req.params.id, req.user.id);
     if (!ok) return res.status(404).json({ error: 'Renta no encontrada' });
@@ -976,7 +987,7 @@ app.delete('/api/rentas/:id', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/rentas/:id/pagos', requireAuth, (req, res) => {
+app.post('/api/rentas/:id/pagos', requireAuth, requireEdicionFlota, (req, res) => {
   const body = req.body || {};
   try {
     const result = addPago(
@@ -1041,7 +1052,7 @@ const uploadClienteDoc = multer({
   },
 });
 
-app.get('/api/clientes', requireAuth, (_req, res) => {
+app.get('/api/clientes', requireAuth, requireAccesoClientes, (_req, res) => {
   try {
     res.json({ clientes: getAllClientes() });
   } catch (err) {
@@ -1050,7 +1061,7 @@ app.get('/api/clientes', requireAuth, (_req, res) => {
   }
 });
 
-app.get('/api/clientes/:id', requireAuth, (req, res) => {
+app.get('/api/clientes/:id', requireAuth, requireAccesoClientes, (req, res) => {
   try {
     const cliente = getClienteById(req.params.id);
     if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
@@ -1061,7 +1072,7 @@ app.get('/api/clientes/:id', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/clientes', requireAuth, (req, res) => {
+app.post('/api/clientes', requireAuth, requireAccesoClientes, (req, res) => {
   try {
     const cliente = createCliente(req.body || {}, req.user.id);
     if (!cliente) return res.status(400).json({ error: 'Nombre comercial es requerido' });
@@ -1072,7 +1083,7 @@ app.post('/api/clientes', requireAuth, (req, res) => {
   }
 });
 
-app.put('/api/clientes/:id', requireAuth, (req, res) => {
+app.put('/api/clientes/:id', requireAuth, requireAccesoClientes, (req, res) => {
   try {
     const cliente = updateCliente(req.params.id, req.body || {}, req.user.id);
     if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
@@ -1083,7 +1094,7 @@ app.put('/api/clientes/:id', requireAuth, (req, res) => {
   }
 });
 
-app.delete('/api/clientes/:id', requireAuth, (req, res) => {
+app.delete('/api/clientes/:id', requireAuth, requireAccesoClientes, (req, res) => {
   try {
     const ok = deleteClienteSoft(req.params.id, req.user.id);
     if (!ok) return res.status(404).json({ error: 'Cliente no encontrado' });
@@ -1094,7 +1105,7 @@ app.delete('/api/clientes/:id', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/clientes/:id/documentos', requireAuth, uploadClienteDoc.single('documento'), (req, res) => {
+app.post('/api/clientes/:id/documentos', requireAuth, requireAccesoClientes, uploadClienteDoc.single('documento'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No se envió ningún documento' });
   const tipo = (req.body.tipo || 'otro').trim();
   const nombre = (req.body.nombre || req.file.originalname).trim();
@@ -1113,7 +1124,7 @@ app.post('/api/clientes/:id/documentos', requireAuth, uploadClienteDoc.single('d
   }
 });
 
-app.delete('/api/clientes/:id/documentos/:docId', requireAuth, (req, res) => {
+app.delete('/api/clientes/:id/documentos/:docId', requireAuth, requireAccesoClientes, (req, res) => {
   try {
     const out = deleteClienteDocumento(req.params.docId, req.user.id);
     if (!out || String(out.clienteId) !== String(req.params.id)) {
@@ -1131,7 +1142,7 @@ app.delete('/api/clientes/:id/documentos/:docId', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/rentas/:id/documentos', requireAuth, uploadRentaDoc.single('documento'), (req, res) => {
+app.post('/api/rentas/:id/documentos', requireAuth, requireEdicionFlota, uploadRentaDoc.single('documento'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No se envió ningún documento' });
   const tipo = (req.body.tipo || 'contrato').trim();
   const nombre = (req.body.nombre || req.file.originalname).trim();

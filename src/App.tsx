@@ -23,6 +23,9 @@ import { Actividad } from './pages/Actividad';
 import { Configuracion } from './pages/Configuracion';
 import { Perfil } from './pages/Perfil';
 
+/** Menú unidades, rentas y clientes: no aplica a operador_taller (solo taller / patio). */
+const ROLES_CATALOGO_FLOTAS = ['administrador', 'supervisor', 'operador', 'consulta'] as const;
+
 function App() {
   return (
     <BrowserRouter>
@@ -41,11 +44,46 @@ function App() {
           >
             <Route index element={<Dashboard />} />
             <Route path="perfil" element={<Perfil />} />
-            <Route path="unidades" element={<Unidades />} />
-            <Route path="rentas" element={<Rentas />} />
-            <Route path="rentas/:id" element={<RentaDetalle />} />
-            <Route path="clientes" element={<Clientes />} />
-            <Route path="clientes/:id" element={<Clientes />} />
+            <Route
+              path="unidades"
+              element={
+                <ProtectedRoute allowedRoles={[...ROLES_CATALOGO_FLOTAS]}>
+                  <Unidades />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="rentas"
+              element={
+                <ProtectedRoute allowedRoles={[...ROLES_CATALOGO_FLOTAS]}>
+                  <Rentas />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="rentas/:id"
+              element={
+                <ProtectedRoute allowedRoles={[...ROLES_CATALOGO_FLOTAS]}>
+                  <RentaDetalle />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="clientes"
+              element={
+                <ProtectedRoute allowedRoles={[...ROLES_CATALOGO_FLOTAS]}>
+                  <Clientes />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="clientes/:id"
+              element={
+                <ProtectedRoute allowedRoles={[...ROLES_CATALOGO_FLOTAS]}>
+                  <Clientes />
+                </ProtectedRoute>
+              }
+            />
             <Route path="checkinout" element={<CheckInOut />} />
             <Route path="mantenimiento" element={<Mantenimiento />} />
             <Route

@@ -67,6 +67,7 @@ const roleHierarchy = {
   [ROLES.ADMIN]: 4,
   [ROLES.SUPERVISOR]: 3,
   [ROLES.OPERADOR]: 2,
+  [ROLES.OPERADOR_TALLER]: 2,
   [ROLES.CONSULTA]: 1,
 };
 
@@ -84,5 +85,24 @@ export function requireRole(...allowedRoles) {
     next();
   };
 }
+
+/** Catálogo de clientes (API y menú): excluye operador_taller. */
+export const requireAccesoClientes = requireRole(
+  ROLES.ADMIN,
+  ROLES.SUPERVISOR,
+  ROLES.OPERADOR,
+  ROLES.CONSULTA
+);
+
+/**
+ * Alta/edición de unidades y rentas (altas, pagos, documentos): excluye operador_taller.
+ * Operador_taller sigue pudiendo GET /api/unidades y /api/rentas para registrar check-in/out.
+ */
+export const requireEdicionFlota = requireRole(
+  ROLES.ADMIN,
+  ROLES.SUPERVISOR,
+  ROLES.OPERADOR,
+  ROLES.CONSULTA
+);
 
 export { ROLES };

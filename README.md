@@ -10,7 +10,8 @@ El sistema exige iniciar sesión. Los roles disponibles son:
 |----------------|--------------------------------------------------|
 | **administrador** | Acceso total; puede ver Administración y Proveedores |
 | **supervisor** | Gestión operativa y reportes; acceso a Administración |
-| **operador**   | Operación diaria: rentas, check-in/out, unidades, mantenimiento |
+| **operador**   | Operación diaria: rentas, check-in/out, unidades, clientes y mantenimiento |
+| **operador_taller** | Taller/patio: solo **Check-in / Check-out** y **Mantenimiento** (puede listar unidades y rentas para el formulario; no catálogos de unidades, rentas ni clientes) |
 | **consulta**   | Solo lectura en módulos permitidos               |
 
 La base de datos se crea en `server/skyline.db`. Usuarios de prueba (tras ejecutar `npm run seed` o `node server/seed.js`):
@@ -19,6 +20,7 @@ La base de datos se crea en `server/skyline.db`. Usuarios de prueba (tras ejecut
 - `supervisor@skyline.com` / `super123` — supervisor  
 - `operador@skyline.com` / `oper123` — operador  
 - `consulta@skyline.com` / `cons123` — consulta  
+- `taller@skyline.com` / `taller123` — operador_taller (solo check-in/out y mantenimiento)  
 
 ## Los 5 pilares del sistema
 

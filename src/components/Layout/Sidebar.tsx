@@ -5,11 +5,28 @@ import { useAuth } from '../../context/AuthContext';
 
 const STORAGE_KEY = 'skyline_sidebar_collapsed';
 
+const ROLES_CATALOGO_FLOTAS = ['administrador', 'supervisor', 'operador', 'consulta'] as const;
+
 const navItems = [
   { path: '/', label: 'Inicio', icon: 'mdi:view-dashboard' },
-  { path: '/unidades', label: 'Control de Unidades', icon: 'mdi:car-side' },
-  { path: '/rentas', label: 'Gestión de Rentas', icon: 'mdi:calendar-month' },
-  { path: '/clientes', label: 'Clientes', icon: 'mdi:account-tie' },
+  {
+    path: '/unidades',
+    label: 'Control de Unidades',
+    icon: 'mdi:car-side',
+    roles: [...ROLES_CATALOGO_FLOTAS],
+  },
+  {
+    path: '/rentas',
+    label: 'Gestión de Rentas',
+    icon: 'mdi:calendar-month',
+    roles: [...ROLES_CATALOGO_FLOTAS],
+  },
+  {
+    path: '/clientes',
+    label: 'Clientes',
+    icon: 'mdi:account-tie',
+    roles: [...ROLES_CATALOGO_FLOTAS],
+  },
   { path: '/checkinout', label: 'Check-in / Check-out', icon: 'mdi:clipboard-check-outline' },
   { path: '/mantenimiento', label: 'Mantenimiento', icon: 'mdi:wrench' },
   { path: '/administracion', label: 'Administración y Proveedores', icon: 'mdi:domain', roles: ['administrador', 'supervisor'] },

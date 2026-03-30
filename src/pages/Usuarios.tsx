@@ -16,6 +16,7 @@ const ROLES_LABEL: Record<string, string> = {
   administrador: 'Administrador',
   supervisor: 'Supervisor',
   operador: 'Operador',
+  operador_taller: 'Operador taller (check-in/out y mantenimiento)',
   consulta: 'Consulta',
 };
 

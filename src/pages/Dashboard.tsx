@@ -88,9 +88,21 @@ const statIconStyles: Record<string, string> = {
   neutral: 'bg-skyline-muted/10 text-skyline-muted',
 };
 
+const ROLES_CATALOGO_FLOTAS = ['administrador', 'supervisor', 'operador', 'consulta'] as const;
+
 const allPillars = [
-  { path: '/unidades', title: 'Control de Unidades', icon: 'mdi:car-side' },
-  { path: '/rentas', title: 'Gestión de Rentas', icon: 'mdi:calendar-month' },
+  {
+    path: '/unidades',
+    title: 'Control de Unidades',
+    icon: 'mdi:car-side',
+    roles: [...ROLES_CATALOGO_FLOTAS],
+  },
+  {
+    path: '/rentas',
+    title: 'Gestión de Rentas',
+    icon: 'mdi:calendar-month',
+    roles: [...ROLES_CATALOGO_FLOTAS],
+  },
   { path: '/checkinout', title: 'Check-in / Check-out', icon: 'mdi:clipboard-check-outline' },
   { path: '/mantenimiento', title: 'Mantenimiento', icon: 'mdi:wrench' },
   { path: '/administracion', title: 'Administración y Proveedores', icon: 'mdi:domain', roles: ['administrador', 'supervisor'] as const },

@@ -29,6 +29,8 @@ export const ROLES = Object.freeze({
   ADMIN: 'administrador',
   SUPERVISOR: 'supervisor',
   OPERADOR: 'operador',
+  /** Taller / patio: check-in, check-out y mantenimiento; sin unidades, rentas, clientes ni proveedores. */
+  OPERADOR_TALLER: 'operador_taller',
   CONSULTA: 'consulta',
 });
 
@@ -72,7 +74,8 @@ export function initDb() {
   const roles = [
     [ROLES.ADMIN, 'Acceso total al sistema'],
     [ROLES.SUPERVISOR, 'Gestión operativa y reportes'],
-    [ROLES.OPERADOR, 'Operación diaria: rentas, check-in/out'],
+    [ROLES.OPERADOR, 'Operación diaria: rentas, check-in/out, unidades, clientes'],
+    [ROLES.OPERADOR_TALLER, 'Taller: check-in/out y mantenimiento (sin catálogos de unidades, rentas ni clientes)'],
     [ROLES.CONSULTA, 'Solo lectura'],
   ];
   const insertRole = db.prepare(

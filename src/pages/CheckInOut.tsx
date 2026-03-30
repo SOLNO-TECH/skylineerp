@@ -42,33 +42,82 @@ const ROLES_COLABORADOR = [
   { v: 'otro', l: 'Otro' },
 ];
 
-const BASE_MATERIAL: { id: string; label: string }[] = [
-  { id: 'gato', label: 'Gato hidráulico y base' },
-  { id: 'llanta', label: 'Llanta de refacción' },
-  { id: 'cruceta', label: 'Cruceta / barra de fuerza' },
-  { id: 'triangulos', label: 'Triángulos reflejantes' },
-  { id: 'extintor', label: 'Extintor vigente' },
-  { id: 'herramientas', label: 'Kit herramientas básico' },
-  { id: 'llaves', label: 'Llaves de unidad / control' },
-  { id: 'documentos', label: 'Documentación (circulación, seguro visible)' },
-];
+const CHECKLIST_DOC_IDS = new Set(['doc_tarjeta', 'doc_fisico', 'doc_movimiento', 'doc_orden_salida']);
 
-const MATERIAL_REFRIGERADO: { id: string; label: string }[] = [
-  { id: 'mangueras', label: 'Mangueras / conexiones refrigeración' },
-  { id: 'candado', label: 'Candado de puerta / equipo' },
-  { id: 'temperatura', label: 'Equipo de frío operando / registro temp.' },
-];
-
-const MATERIAL_MAQUINARIA: { id: string; label: string }[] = [
-  { id: 'implementos', label: 'Implementos / accesorios acoplados' },
-  { id: 'seguridad_maq', label: 'Elementos de seguridad (cintas, señalización)' },
-];
-
-function buildChecklist(tipoUnidad?: string): ChecklistItemPayload[] {
-  const items = [...BASE_MATERIAL];
-  if (tipoUnidad === 'refrigerado') items.push(...MATERIAL_REFRIGERADO);
-  if (tipoUnidad === 'maquinaria') items.push(...MATERIAL_MAQUINARIA);
+/** Documentación entregada / verificada en el movimiento (mismo conjunto en check-in y check-out; el ítem 3 cambia el nombre). */
+function buildChecklist(tipo: 'checkin' | 'checkout'): ChecklistItemPayload[] {
+  const movimientoLabel =
+    tipo === 'checkin' ? 'Documento de check-in' : 'Documento de check-out';
+  const items: { id: string; label: string }[] = [
+    { id: 'doc_tarjeta', label: 'Tarjeta de circulación' },
+    { id: 'doc_fisico', label: 'Verificación físico-mecánica' },
+    { id: 'doc_movimiento', label: movimientoLabel },
+    { id: 'doc_orden_salida', label: 'Orden de salida' },
+  ];
   return items.map((i) => ({ id: i.id, label: i.label, presente: true }));
+}
+
+function normalizarChecklistGuardado(
+  guardado: ChecklistItemPayload[] | undefined,
+  tipo: 'checkin' | 'checkout'
+): ChecklistItemPayload[] {
+  const base = buildChecklist(tipo);
+  if (!guardado?.length) return base;
+  const porId = new Map(guardado.map((x) => [x.id, x.presente]));
+  if (!guardado.every((x) => CHECKLIST_DOC_IDS.has(x.id))) return base;
+  return base.map((b) => ({ ...b, presente: porId.get(b.id) ?? b.presente }));
+}
+
+function esArchivoVideo(file: File): boolean {
+  if (file.type.startsWith('video/')) return true;
+  return /\.(mp4|webm|mov|ogv|ogg)$/i.test(file.name);
+}
+
+function esNombreVideo(nombre: string): boolean {
+  return /\.(mp4|webm|mov|ogv|ogg)$/i.test(nombre);
+}
+
+function EvidenciaMiniatura({
+  src,
+  nombreMostrar,
+  esVideo,
+  soloLectura,
+  onQuitar,
+}: {
+  src: string;
+  nombreMostrar: string;
+  esVideo: boolean;
+  soloLectura?: boolean;
+  onQuitar?: () => void;
+}) {
+  return (
+    <div className="relative w-28 shrink-0 overflow-hidden rounded-lg border border-skyline-border bg-white shadow-sm">
+      {esVideo ? (
+        <video
+          src={src}
+          className="h-24 w-full bg-black object-cover"
+          controls
+          playsInline
+          preload="metadata"
+          title={nombreMostrar}
+        />
+      ) : (
+        <img src={src} alt={nombreMostrar} className="h-24 w-full object-cover" />
+      )}
+      <p className="truncate px-1 py-0.5 text-[10px] text-gray-500" title={nombreMostrar}>
+        {nombreMostrar}
+      </p>
+      {!soloLectura && onQuitar && (
+        <button
+          type="button"
+          className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-red-700 shadow"
+          onClick={onQuitar}
+        >
+          Quitar
+        </button>
+      )}
+    </div>
+  );
 }
 
 function formatFechaRegistro(s: string) {
@@ -222,7 +271,9 @@ function TriPick({ label, value, onChange }: { label: string; value: Tri; onChan
 export function CheckInOut() {
   const { hasRole } = useAuth();
   const { toast } = useNotification();
-  const soloLectura = hasRole('consulta') && !hasRole('administrador', 'supervisor', 'operador');
+  const soloLectura =
+    hasRole('consulta') &&
+    !hasRole('administrador', 'supervisor', 'operador', 'operador_taller');
 
   const [unidades, setUnidades] = useState<UnidadRow[]>([]);
   const [rentas, setRentas] = useState<RentaRow[]>([]);
@@ -241,7 +292,7 @@ export function CheckInOut() {
   const [colaboradorRol, setColaboradorRol] = useState('');
   const [kilometraje, setKilometraje] = useState('');
   const [combustiblePct, setCombustiblePct] = useState('');
-  const [checklist, setChecklist] = useState<ChecklistItemPayload[]>(() => buildChecklist());
+  const [checklist, setChecklist] = useState<ChecklistItemPayload[]>(() => buildChecklist('checkin'));
   const [observaciones, setObservaciones] = useState('');
   const [modalidad, setModalidad] = useState<CheckinOutModalidad>('caja_seca');
   const [inspeccion, setInspeccion] = useState<InspeccionCompleta>(() => defaultInspeccionCompleta());
@@ -287,8 +338,8 @@ export function CheckInOut() {
 
   useEffect(() => {
     if (editandoId) return;
-    if (unidadSel) {
-      setChecklist(buildChecklist(unidadSel.tipoUnidad));
+    if (unidadSel && modalTipo) {
+      setChecklist(buildChecklist(modalTipo));
       setKilometraje(String(unidadSel.kilometraje ?? ''));
       setCombustiblePct(String(unidadSel.combustiblePct ?? ''));
       setModalidad(defaultModalidadPorTipoUnidad(unidadSel.tipoUnidad));
@@ -304,7 +355,7 @@ export function CheckInOut() {
             : 'Caja seca / remolque';
       setInspeccion(fresh);
     }
-  }, [unidadSel?.id, unidadSel?.tipoUnidad, editandoId]);
+  }, [unidadSel?.id, unidadSel?.tipoUnidad, editandoId, modalTipo]);
 
   const rentasUnidad = useMemo(() => {
     if (!unidadId) return [];
@@ -345,7 +396,7 @@ export function CheckInOut() {
     setColaboradorNombre('');
     setColaboradorRol('');
     setObservaciones('');
-    setChecklist(buildChecklist());
+    setChecklist(buildChecklist(tipo));
     setKilometraje('');
     setCombustiblePct('');
     setModalidad('caja_seca');
@@ -369,10 +420,7 @@ export function CheckInOut() {
     setKilometraje(reg.kilometraje != null ? String(reg.kilometraje) : '');
     setCombustiblePct(reg.combustiblePct != null ? String(reg.combustiblePct) : '');
     setObservaciones(reg.observaciones || '');
-    const u = unidades.find((x) => x.id === reg.unidadId);
-    setChecklist(
-      reg.checklist && reg.checklist.length > 0 ? reg.checklist : buildChecklist(u?.tipoUnidad)
-    );
+    setChecklist(normalizarChecklistGuardado(reg.checklist, reg.tipo));
     setModalidad(reg.modalidad ?? 'caja_seca');
     setInspeccion(mergeInspeccionGuardada(reg.inspeccion));
     setFotosPendientes([]);
@@ -536,7 +584,7 @@ export function CheckInOut() {
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Check-in / Check-out</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
             Registra recepción y entrega de unidades: colaborador, lecturas, hoja de inspección (caja seca,
-            refrigerado o mulita), evidencia en fotos e inventario de material.
+            refrigerado o mulita), evidencia en fotos o video y documentación entregada.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:items-stretch lg:flex-row">
@@ -684,7 +732,7 @@ export function CheckInOut() {
               <tbody className="divide-y divide-slate-100">
                 {registrosFiltrados.map((r) => {
                   const { fecha, hora } = fechaRegistroPartes(r.creadoEn);
-                  const nFotos = r.imagenes?.length ?? 0;
+                  const nArchivos = r.imagenes?.length ?? 0;
                   const mod = r.modalidad ?? 'caja_seca';
                   return (
                   <tr
@@ -719,10 +767,10 @@ export function CheckInOut() {
                     <td className="hidden max-w-[200px] px-4 py-3 md:table-cell">
                       <div className="flex flex-col gap-1.5">
                         <ModalidadPill m={mod} />
-                        {nFotos > 0 ? (
+                        {nArchivos > 0 ? (
                           <span className="inline-flex w-fit items-center gap-1 rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-900">
-                            <Icon icon="mdi:image-multiple" className="size-3" aria-hidden />
-                            {nFotos} foto{nFotos !== 1 ? 's' : ''}
+                            <Icon icon="mdi:folder-multimedia-outline" className="size-3" aria-hidden />
+                            {nArchivos} archivo{nArchivos !== 1 ? 's' : ''}
                           </span>
                         ) : null}
                       </div>
@@ -839,7 +887,7 @@ export function CheckInOut() {
                         ? 'Ajusta lo necesario y guarda. El usuario que creó el registro no cambia.'
                         : modalTipo === 'checkout'
                           ? 'Queda en historial de la unidad y, si vinculas renta, queda ligado al expediente del cliente.'
-                          : 'Queda en historial de la unidad con inspección, fotos y material revisado.'}
+                          : 'Queda en historial con inspección, evidencia y documentos revisados.'}
                     </p>
                   </div>
                 </div>
@@ -881,7 +929,15 @@ export function CheckInOut() {
                   <label className="mb-1 block text-sm font-medium text-slate-700">Tipo de movimiento</label>
                   <select
                     value={modalTipo || 'checkin'}
-                    onChange={(e) => setModalTipo(e.target.value as 'checkin' | 'checkout')}
+                    onChange={(e) => {
+                      const next = e.target.value as 'checkin' | 'checkout';
+                      setModalTipo(next);
+                      setChecklist((prev) => {
+                        const base = buildChecklist(next);
+                        const presente = new Map(prev.map((p) => [p.id, p.presente]));
+                        return base.map((b) => ({ ...b, presente: presente.get(b.id) ?? b.presente }));
+                      });
+                    }}
                     className="input w-full"
                   >
                     <option value="checkin">Check-in (recepción)</option>
@@ -1610,50 +1666,37 @@ export function CheckInOut() {
 
               <FormSection
                 step={4}
-                title="Evidencia fotográfica"
-                hint="Ideal en check-in: carrocería, equipo, placas o anomalías. Las fotos se adjuntan al guardar o al editar después."
-                icon="mdi:camera-outline"
+                title="Evidencia fotográfica y video"
+                hint="Imágenes y videos cortos (recomendado MP4 / WebM). Máx. ~80 MB por archivo. Se pueden subir después de guardar el registro."
+                icon="mdi:video-vintage"
               >
                 <div className="rounded-xl border border-violet-100 bg-violet-50/35 p-3 sm:p-4">
                   <p className="mb-3 text-xs leading-relaxed text-slate-600">
-                    Puedes seleccionar varias imágenes. Formatos habituales JPG / PNG desde teléfono o PC.
+                    Desde el móvil puedes adjuntar fotos o grabaciones (daños, placas, unidad, documentos). Los videos se
+                    reproducen al pulsar play.
                   </p>
                 {registroEditando && registroEditando.imagenes && registroEditando.imagenes.length > 0 && (
                   <div className="mb-3 flex flex-wrap gap-3">
                     {registroEditando.imagenes.map((img) => (
-                      <div
+                      <EvidenciaMiniatura
                         key={img.id}
-                        className="relative w-28 shrink-0 overflow-hidden rounded-lg border border-skyline-border bg-white shadow-sm"
-                      >
-                        <img
-                          src={getImagenUrl(img.ruta)}
-                          alt={img.nombreArchivo}
-                          className="h-24 w-full object-cover"
-                        />
-                        <p className="truncate px-1 py-0.5 text-[10px] text-gray-500" title={img.nombreArchivo}>
-                          {img.nombreArchivo}
-                        </p>
-                        {!soloLectura && (
-                          <button
-                            type="button"
-                            className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-red-700 shadow"
-                            onClick={() => quitarFotoGuardada(img.id)}
-                          >
-                            Quitar
-                          </button>
-                        )}
-                      </div>
+                        src={getImagenUrl(img.ruta)}
+                        nombreMostrar={img.nombreArchivo}
+                        esVideo={esNombreVideo(img.nombreArchivo)}
+                        soloLectura={soloLectura}
+                        onQuitar={() => quitarFotoGuardada(img.id)}
+                      />
                     ))}
                   </div>
                 )}
                 {!soloLectura && (
                   <>
                     <label className="btn btn-outline inline-flex cursor-pointer items-center gap-2 text-sm">
-                      <Icon icon="mdi:camera-plus" className="size-5" aria-hidden />
-                      Añadir fotos
+                      <Icon icon="mdi:filmstrip-box-multiple" className="size-5" aria-hidden />
+                      Añadir fotos o videos
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/*,video/mp4,video/webm,video/quicktime,video/ogg"
                         multiple
                         className="hidden"
                         onChange={(e) => {
@@ -1670,11 +1713,21 @@ export function CheckInOut() {
                             key={`${file.name}-${file.size}-${idx}`}
                             className="w-28 shrink-0 overflow-hidden rounded-lg border border-skyline-border bg-white"
                           >
-                            <img
-                              src={fotosPendientesUrls[idx]}
-                              alt=""
-                              className="h-24 w-full object-cover"
-                            />
+                            {esArchivoVideo(file) ? (
+                              <video
+                                src={fotosPendientesUrls[idx]}
+                                className="h-24 w-full bg-black object-cover"
+                                controls
+                                playsInline
+                                preload="metadata"
+                              />
+                            ) : (
+                              <img
+                                src={fotosPendientesUrls[idx]}
+                                alt=""
+                                className="h-24 w-full object-cover"
+                              />
+                            )}
                             <div className="flex items-center justify-between gap-1 px-1 py-0.5">
                               <span className="truncate text-[10px] text-gray-600" title={file.name}>
                                 {file.name}
@@ -1700,20 +1753,12 @@ export function CheckInOut() {
 
               <FormSection
                 step={5}
-                title="Inventario y observaciones"
-                hint="Lista de material que debe viajar con la unidad y notas libres (daños, acuerdos, incidencias)."
-                icon="mdi:package-variant-closed"
+                title="Documentación entregada y observaciones"
+                hint="Constancia de los documentos que se entregan o se verifican en este check-in o check-out. El tercer ítem cambia según el tipo de movimiento."
+                icon="mdi:file-document-multiple-outline"
               >
               <div>
-                <p className="mb-2 text-sm font-semibold text-slate-800">
-                  Inventario / material
-                  {unidadSel?.tipoUnidad === 'refrigerado' && (
-                    <span className="ml-2 font-normal text-skyline-blue">· ítems refrigerado incluidos</span>
-                  )}
-                  {unidadSel?.tipoUnidad === 'maquinaria' && (
-                    <span className="ml-2 font-normal text-skyline-blue">· ítems mulita incluidos</span>
-                  )}
-                </p>
+                <p className="mb-2 text-sm font-semibold text-slate-800">Documentos</p>
                 <ul className="max-h-52 space-y-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 sm:p-3">
                   {checklist.map((c) => (
                     <li
@@ -1739,8 +1784,8 @@ export function CheckInOut() {
                   ))}
                 </ul>
                 <p className="mt-2 text-xs text-slate-500">
-                  <span className="font-semibold text-slate-600">Tip:</span> desmarca lo que falte; queda claro qué se
-                  revisó en este movimiento.
+                  <span className="font-semibold text-slate-600">Tip:</span> desmarca lo que no aplique o falte en la
+                  entrega.
                 </p>
               </div>
 
