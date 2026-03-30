@@ -73,11 +73,14 @@ import { getSoporteReply } from './soporteChat.js';
 import { generarBufferExportCrudXlsx } from './exportCatalogoCrud.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const UPLOADS_DIR = join(__dirname, 'uploads', 'unidades');
-const DOCS_DIR = join(__dirname, 'uploads', 'documentos');
-const AVATAR_DIR = join(__dirname, 'uploads', 'avatares');
-const CHECKIN_FOTOS_DIR = join(__dirname, 'uploads', 'checkin-out');
-const CLIENTE_DOCS_DIR = join(__dirname, 'uploads', 'clientes');
+/** En Docker monta un volumen aquí para persistir BD (y uploads bajo `uploads/`). Ver docker-compose. */
+const DATA_DIR = process.env.SKYLINE_DATA_DIR?.trim() || __dirname;
+const UPLOADS_BASE = join(DATA_DIR, 'uploads');
+const UPLOADS_DIR = join(UPLOADS_BASE, 'unidades');
+const DOCS_DIR = join(UPLOADS_BASE, 'documentos');
+const AVATAR_DIR = join(UPLOADS_BASE, 'avatares');
+const CHECKIN_FOTOS_DIR = join(UPLOADS_BASE, 'checkin-out');
+const CLIENTE_DOCS_DIR = join(UPLOADS_BASE, 'clientes');
 
 initDb();
 
@@ -221,7 +224,7 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '40mb' }));
-app.use('/uploads', express.static(join(__dirname, 'uploads')));
+app.use('/uploads', express.static(UPLOADS_BASE));
 
 app.post('/api/auth/login', (req, res) => {
   try {
@@ -283,7 +286,7 @@ function clearPerfilAvatar(req, res) {
     if (!perfil) return res.status(404).json({ error: 'Usuario no encontrado' });
     const ruta = (perfil.avatar || '').trim();
     if (ruta && !ruta.includes('..') && !ruta.startsWith('/')) {
-      const abs = join(__dirname, 'uploads', ruta);
+      const abs = join(UPLOADS_BASE, ruta);
       fs.unlink(abs, () => {});
     }
     updateUsuario(req.user.id, { avatar: '' }, req.user.id);
@@ -430,7 +433,7 @@ app.post('/api/usuarios/:id/eliminar', requireAuth, requireRole(ROLES.ADMIN), (r
   }
   const ruta = (user.avatar || '').trim();
   if (ruta && !ruta.includes('..') && !ruta.startsWith('/')) {
-    fs.unlink(join(__dirname, 'uploads', ruta), () => {});
+    fs.unlink(join(UPLOADS_BASE, ruta), () => {});
   }
   try {
     eliminarUsuarioDefinitivo(id, req.user.id);
@@ -614,7 +617,7 @@ app.delete('/api/unidades/:id/documentos/:docId', requireAuth, (req, res) => {
       return res.status(404).json({ error: 'Documento no encontrado' });
     }
     if (deleted.ruta) {
-      const fullPath = join(__dirname, 'uploads', deleted.ruta);
+      const fullPath = join(UPLOADS_BASE, deleted.ruta);
       fs.unlink(fullPath, () => {});
     }
     const unidad = getUnidadById(req.params.id);
@@ -655,7 +658,7 @@ app.delete('/api/unidades/:id/imagenes/:imgId', requireAuth, (req, res) => {
   try {
     const result = deleteUnidadImagen(req.params.imgId, req.user.id);
     if (!result) return res.status(404).json({ error: 'Imagen no encontrada' });
-    const filePath = join(__dirname, 'uploads', result.ruta);
+    const filePath = join(UPLOADS_BASE, result.ruta);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     const unidad = getUnidadById(req.params.id);
     res.json({ unidad });
@@ -789,7 +792,7 @@ app.delete('/api/checkin-out/:id/imagenes/:imgId', requireAuth, (req, res) => {
       return res.status(404).json({ error: 'Imagen no encontrada' });
     }
     if (deleted.ruta) {
-      fs.unlink(join(__dirname, 'uploads', deleted.ruta), () => {});
+      fs.unlink(join(UPLOADS_BASE, deleted.ruta), () => {});
     }
     const reg = getCheckinOutRegistroById(req.params.id);
     if (!reg) return res.status(404).json({ error: 'Registro no encontrado' });
@@ -996,7 +999,7 @@ app.post('/api/rentas/:id/pagos', requireAuth, (req, res) => {
   }
 });
 
-const RENTA_DOCS_DIR = join(__dirname, 'uploads', 'rentas');
+const RENTA_DOCS_DIR = join(UPLOADS_BASE, 'rentas');
 fs.mkdirSync(RENTA_DOCS_DIR, { recursive: true });
 const rentaDocStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -1117,7 +1120,7 @@ app.delete('/api/clientes/:id/documentos/:docId', requireAuth, (req, res) => {
       return res.status(404).json({ error: 'Documento no encontrado' });
     }
     if (out.ruta && !out.ruta.includes('..')) {
-      const abs = join(__dirname, 'uploads', out.ruta);
+      const abs = join(UPLOADS_BASE, out.ruta);
       fs.unlink(abs, () => {});
     }
     const cliente = getClienteById(req.params.id);
@@ -1209,7 +1212,7 @@ app.put('/api/mantenimiento/:id', requireAuth, (req, res) => {
 });
 
 /* Proveedores y cuentas por pagar */
-const PROVEEDOR_FACTURAS_DIR = join(__dirname, 'uploads', 'proveedores');
+const PROVEEDOR_FACTURAS_DIR = join(UPLOADS_BASE, 'proveedores');
 fs.mkdirSync(PROVEEDOR_FACTURAS_DIR, { recursive: true });
 const proveedorFacturaStorage = multer.diskStorage({
   destination: (req, _file, cb) => {

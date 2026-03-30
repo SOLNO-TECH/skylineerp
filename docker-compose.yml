@@ -2,7 +2,11 @@
 # En Dokploy: crea un proyecto → Docker Compose → repo + este archivo.
 # Variables: JWT_SECRET (obligatorio). Opcional si la BD está vacía:
 # SKYLINE_INITIAL_ADMIN_PASSWORD — mín. 8 caracteres; crea admin@skyline.com al primer arranque. Quitar después.
-# Puerto HOST 8080 → contenedor 3000 (evita chocar con Dokploy, que suele usar :3000).
+# Puerto HOST 8080 → contenedor 3000 (evita conflictos con Dokploy en :3000).
+#
+# IMPORTANTE: el volumen solo cubre /app/server/data (SQLite + uploads). No montes todo /app/server:
+# si el volumen reemplaza el código del contenedor, el API queda “congelado” en la primera versión
+# desplegada y rutas nuevas (p. ej. /api/clientes) devuelven «Ruta no encontrada».
 
 services:
   skyline:
@@ -14,8 +18,9 @@ services:
       NODE_ENV: production
       PORT: "3000"
       JWT_SECRET: ${JWT_SECRET}
+      SKYLINE_DATA_DIR: /app/server/data
     volumes:
-      - skyline_data:/app/server
+      - skyline_data:/app/server/data
 
 volumes:
   skyline_data:

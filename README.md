@@ -66,3 +66,11 @@ Abre [http://localhost:5173](http://localhost:5173), serás redirigido a **/logi
 - `src/theme.css` — Variables de diseño SKYLINE (colores, tipografía, componentes base).
 - `src/components/Layout/` — Barra lateral y layout principal.
 - `src/pages/` — Páginas por pilar: Dashboard, Unidades, Rentas, CheckInOut, Mantenimiento, Administración.
+
+## Despliegue (Docker / Dokploy)
+
+Define **`JWT_SECRET`** en el entorno. Si la base está vacía, puedes usar **`SKYLINE_INITIAL_ADMIN_PASSWORD`** (≥ 8 caracteres) una vez para crear `admin@skyline.com`.
+
+El `docker-compose.yml` del repo monta el volumen solo en **`/app/server/data`**, con **`SKYLINE_DATA_DIR=/app/server/data`**. Ahí se guardan **`skyline.db`** y la carpeta **`uploads/`**. El código del API (`index.js`, `db.js`, etc.) **no** va en el volumen: así cada despliegue trae rutas nuevas (p. ej. `/api/clientes`).
+
+Si antes montabas **todo** `/app/server` y veías **«Ruta no encontrada»** con un front actualizado, el contenedor estaba sirviendo un `index.js` viejo copiado al volumen. Actualiza el compose como en el repo, vuelve a desplegar y conserva el mismo volumen nombrado: tu `skyline.db` y `uploads` suelen seguir en la raíz de ese volumen, que ahora se ve bajo `/app/server/data`.

@@ -1,5 +1,6 @@
 # Skyline ERP — API Express + SPA en /dist (mismo origen: /api, /uploads, rutas React).
-# Dokploy: publicar puerto (PORT, default 3000), volumen persistente en /app/server, JWT_SECRET obligatorio.
+# Dokploy: publicar puerto (PORT, default 3000), JWT_SECRET obligatorio.
+# Persistencia: montar volúmenes en /app/server/data (BD) y /app/server/uploads — no en todo /app/server.
 
 FROM node:22-alpine AS frontend-build
 WORKDIR /app

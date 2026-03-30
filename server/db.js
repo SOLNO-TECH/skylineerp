@@ -1,9 +1,18 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const dbPath = join(__dirname, 'skyline.db');
+const dataDir = process.env.SKYLINE_DATA_DIR?.trim();
+const dbPathOverride = process.env.SKYLINE_DB_PATH?.trim();
+/** Docker: `SKYLINE_DATA_DIR=/app/server/data` → `…/data/skyline.db`. También se admite `SKYLINE_DB_PATH` explícito. */
+const dbPath = dbPathOverride
+  ? dbPathOverride
+  : dataDir
+    ? join(dataDir, 'skyline.db')
+    : join(__dirname, 'skyline.db');
+fs.mkdirSync(dirname(dbPath), { recursive: true });
 export const db = new Database(dbPath);
 db.pragma('foreign_keys = ON');
 
