@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useNotification } from '../context/NotificationContext';
 import {
   getRenta,
@@ -23,7 +23,7 @@ const ESTADOS: Record<string, { label: string; color: string }> = {
 const TIPOS_UNIDAD: Record<string, string> = {
   remolque_seco: 'Remolque seco',
   refrigerado: 'Refrigerado',
-  maquinaria: 'Maquinaria',
+  maquinaria: 'Mulita',
 };
 
 const TIPOS_SERVICIO: Record<string, string> = {
@@ -207,6 +207,17 @@ export function RentaDetalle() {
                 <dd className="break-all text-gray-900">{renta.clienteEmail?.trim() || '—'}</dd>
               </div>
             </dl>
+            {renta.clienteId ? (
+              <div className="mt-4">
+                <Link
+                  to={`/clientes/${renta.clienteId}`}
+                  className="btn btn-outline inline-flex items-center gap-2 text-sm"
+                >
+                  <Icon icon="mdi:folder-account" className="size-5 text-skyline-blue" aria-hidden />
+                  Ver expediente en catálogo de clientes
+                </Link>
+              </div>
+            ) : null}
           </div>
 
           <div className="mb-6 grid gap-4 sm:grid-cols-2">
@@ -350,7 +361,7 @@ export function RentaDetalle() {
           )}
           {renta.maquinaria && (
             <div className="rounded-lg border border-skyline-border p-4">
-              <h3 className="text-sm font-semibold text-gray-700">Datos maquinaria</h3>
+              <h3 className="text-sm font-semibold text-gray-700">Datos mulita</h3>
               <p className="mt-1 text-sm text-gray-600">
                 Operador: {renta.maquinaria.operadorAsignado} · Horas: {renta.maquinaria.horasTrabajadas} · Trabajo:{' '}
                 {renta.maquinaria.tipoTrabajo}

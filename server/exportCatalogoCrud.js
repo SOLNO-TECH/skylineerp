@@ -18,8 +18,9 @@ const HOJAS = [
   {
     sheet: 'unidades',
     table: 'unidades',
-    sql: `SELECT id, placas, marca, modelo, estatus, tipo_unidad, estado_mantenimiento, horas_motor,
-                 kilometraje, combustible_pct, observaciones, activo, creado_en, actualizado_en
+    sql: `SELECT id, placas, marca, modelo, numero_serie_caja, estatus, subestatus_disponible, ubicacion_disponible,
+                 tipo_unidad, estado_mantenimiento, horas_motor, kilometraje, combustible_pct, observaciones,
+                 activo, creado_en, actualizado_en
           FROM unidades ORDER BY id`,
     dateColumns: ['creado_en', 'actualizado_en'],
   },
@@ -42,9 +43,23 @@ const HOJAS = [
     dateColumns: ['fecha_subida'],
   },
   {
+    sheet: 'clientes',
+    table: 'clientes',
+    sql: `SELECT id, tipo, nombre_comercial, razon_social, rfc, curp, representante_legal, telefono, email,
+                 direccion, notas, activo, creado_en, actualizado_en
+          FROM clientes ORDER BY id`,
+    dateColumns: ['creado_en', 'actualizado_en'],
+  },
+  {
+    sheet: 'cliente_documentos',
+    table: 'cliente_documentos',
+    sql: 'SELECT * FROM cliente_documentos ORDER BY id',
+    dateColumns: ['creado_en'],
+  },
+  {
     sheet: 'rentas',
     table: 'rentas',
-    sql: `SELECT id, unidad_id, cliente_nombre, cliente_telefono, cliente_email, fecha_inicio, fecha_fin, estado,
+    sql: `SELECT id, unidad_id, cliente_id, cliente_nombre, cliente_telefono, cliente_email, fecha_inicio, fecha_fin, estado,
                  monto, deposito, observaciones, creado_en, tipo_servicio, ubicacion_entrega, ubicacion_recoleccion,
                  estado_logistico, precio_base, extras, operador_asignado
           FROM rentas ORDER BY id`,

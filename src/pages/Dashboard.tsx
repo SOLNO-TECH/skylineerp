@@ -21,6 +21,7 @@ import {
   getUnidades,
   getActividadReciente,
   getRentasProximosVencimientos,
+  getRentas,
 } from '../api/client';
 
 function welcomeDisplayName(u: User): string {
@@ -95,14 +96,45 @@ const allPillars = [
   { path: '/administracion', title: 'Administración y Proveedores', icon: 'mdi:domain', roles: ['administrador', 'supervisor'] as const },
 ];
 
-const rentasPorSemana = [
-  { semana: 'Sem 1', rentas: 18 },
-  { semana: 'Sem 2', rentas: 22 },
-  { semana: 'Sem 3', rentas: 15 },
-  { semana: 'Sem 4', rentas: 28 },
-  { semana: 'Sem 5', rentas: 24 },
-  { semana: 'Sem 6', rentas: 31 },
-];
+function startOfWeekMonday(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+function parseDateOnly(s: string): Date | null {
+  if (!s) return null;
+  const d = new Date(`${s}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function buildRentasSemanas(fechaInicioRentas: string[], weeks = 6): { semana: string; rentas: number }[] {
+  const startCurrentWeek = startOfWeekMonday(new Date());
+  const buckets = Array.from({ length: weeks }, (_, i) => {
+    const start = new Date(startCurrentWeek);
+    start.setDate(start.getDate() - (weeks - 1 - i) * 7);
+    return { start, rentas: 0 };
+  });
+
+  for (const f of fechaInicioRentas) {
+    const d = parseDateOnly(f);
+    if (!d) continue;
+    for (let i = 0; i < buckets.length; i++) {
+      const bucketStart = buckets[i].start;
+      const bucketEnd = new Date(bucketStart);
+      bucketEnd.setDate(bucketEnd.getDate() + 7);
+      if (d >= bucketStart && d < bucketEnd) {
+        buckets[i].rentas += 1;
+        break;
+      }
+    }
+  }
+
+  return buckets.map((b, idx) => ({ semana: `Sem ${idx + 1}`, rentas: b.rentas }));
+}
 
 function formatHoraRelativa(fechaStr: string): string {
   if (!fechaStr) return '';
@@ -137,6 +169,7 @@ function diasHasta(fechaStr: string): number {
 export function Dashboard() {
   const { hasRole, user } = useAuth();
   const [unidades, setUnidades] = useState<{ estatus: string }[]>([]);
+  const [fechasInicioRentas, setFechasInicioRentas] = useState<string[]>([]);
   const [actividad, setActividad] = useState<
     { id: string; accion: string; detalle: string; fecha: string; icon: string; usuarioNombre?: string }[]
   >([]);
@@ -148,14 +181,17 @@ export function Dashboard() {
       getUnidades(),
       getActividadReciente(10),
       getRentasProximosVencimientos(14),
+      getRentas(),
     ])
-      .then(([u, a, v]) => {
+      .then(([u, a, v, r]) => {
         setUnidades(u);
         setActividad(a);
         setVencimientos(v);
+        setFechasInicioRentas(r.map((item) => item.fechaInicio));
       })
       .catch(() => {
         setUnidades([]);
+        setFechasInicioRentas([]);
         setActividad([]);
         setVencimientos([]);
       })
@@ -188,6 +224,11 @@ export function Dashboard() {
     ].filter((d) => d.value > 0);
     return data.length > 0 ? data : [{ name: 'Sin unidades', value: 1, color: '#E9ECEF' }];
   }, [counts]);
+
+  const rentasPorSemana = useMemo(
+    () => buildRentasSemanas(fechasInicioRentas, 6),
+    [fechasInicioRentas]
+  );
 
   const pillars = allPillars.filter(
     (p) => !('roles' in p && p.roles) || hasRole(...(p.roles ?? []))

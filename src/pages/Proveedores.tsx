@@ -389,6 +389,12 @@ export function Proveedores() {
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700">
                     Saldo
                   </th>
+                  <th
+                    className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700"
+                    title="Suma de costos de mantenimiento vinculados a este proveedor"
+                  >
+                    Mantenimiento
+                  </th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700">
                     Acciones
                   </th>
@@ -397,7 +403,7 @@ export function Proveedores() {
               <tbody>
                 {filtrados.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-gray-500">
+                    <td colSpan={8} className="px-4 py-12 text-center text-gray-500">
                       {lista.length === 0
                         ? 'No hay proveedores. Crea uno con «Nuevo proveedor».'
                         : 'Ningún resultado para la búsqueda.'}
@@ -423,6 +429,9 @@ export function Proveedores() {
                       }`}
                     >
                       {fmtMoney(p.saldoPendiente)}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-violet-800">
+                      {fmtMoney(p.totalMantenimiento ?? 0)}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex flex-wrap justify-end gap-2">

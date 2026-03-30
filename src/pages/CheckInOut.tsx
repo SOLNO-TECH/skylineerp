@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -10,11 +10,28 @@ import {
   createCheckinOutRegistro,
   updateCheckinOutRegistro,
   deleteCheckinOutRegistro,
+  uploadCheckinOutImagen,
+  deleteCheckinOutImagen,
+  getImagenUrl,
   type UnidadRow,
   type RentaRow,
   type CheckinOutRegistro,
   type ChecklistItemPayload,
+  type CheckinOutModalidad,
 } from '../api/client';
+import {
+  MODALIDAD_LABEL,
+  CAJA_SECA_SECCIONES,
+  MULITA_SECCIONES_HASTA_LLANTAS,
+  MULITA_SECCIONES_TRAS_LLANTAS,
+  REFRIGERACION_PRUEBA_IDS,
+  defaultInspeccionCompleta,
+  mergeInspeccionGuardada,
+  defaultModalidadPorTipoUnidad,
+  type InspeccionCompleta,
+  type Tri,
+  type MulitaSeccionDef,
+} from '../lib/checkinInspeccion';
 
 const ROLES_COLABORADOR = [
   { v: '', l: 'Sin especificar' },
@@ -66,12 +83,83 @@ function formatFechaRegistro(s: string) {
   });
 }
 
+/** Fecha en tabla: primera línea legible, segunda hora */
+function fechaRegistroPartes(s: string) {
+  if (!s) return { fecha: '', hora: '' };
+  const d = new Date(s.replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return { fecha: s, hora: '' };
+  return {
+    fecha: d.toLocaleDateString('es-MX', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }),
+    hora: d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }),
+  };
+}
+
+const MODALIDAD_BADGE: Record<CheckinOutModalidad, string> = {
+  caja_seca: 'border-slate-200/80 bg-slate-100 text-slate-800',
+  refrigerado: 'border-sky-200 bg-sky-100 text-sky-950',
+  mulita_patio: 'border-amber-200 bg-amber-100 text-amber-950',
+};
+
+function ModalidadPill({ m }: { m: CheckinOutModalidad }) {
+  return (
+    <span
+      className={`inline-flex max-w-[220px] items-center truncate rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${MODALIDAD_BADGE[m]}`}
+      title={MODALIDAD_LABEL[m]}
+    >
+      {MODALIDAD_LABEL[m]}
+    </span>
+  );
+}
+
+function FormSection({
+  step,
+  title,
+  hint,
+  icon,
+  children,
+  className = '',
+}: {
+  step?: number;
+  title: string;
+  hint?: string;
+  icon?: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={`overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-900/[0.04] ${className}`}
+    >
+      <div className="flex items-start gap-3 border-b border-slate-100/90 bg-gradient-to-r from-slate-50/90 via-white to-slate-50/40 px-4 py-3.5 sm:px-5">
+        {step != null ? (
+          <span
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-skyline-blue text-sm font-bold text-white shadow-sm"
+            aria-hidden
+          >
+            {step}
+          </span>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {icon ? <Icon icon={icon} className="size-5 shrink-0 text-skyline-blue" aria-hidden /> : null}
+            <h3 className="text-[15px] font-semibold leading-snug tracking-tight text-slate-900">{title}</h3>
+          </div>
+          {hint ? <p className="mt-1 text-xs leading-relaxed text-slate-500">{hint}</p> : null}
+        </div>
+      </div>
+      <div className="p-4 sm:p-5">{children}</div>
+    </section>
+  );
+}
+
 function textoBusquedaRegistro(r: CheckinOutRegistro): string {
-  const tipoTxt = r.tipo === 'checkin' ? 'check-in checkin entrada recepción' : 'check-out checkout salida entrega';
+  const tipoTxt =     r.tipo === 'checkin' ? 'check-in checkin entrada recepción' : 'check-out checkout salida entrega';
+  const mod = r.modalidad ? MODALIDAD_LABEL[r.modalidad] : '';
   return [
     r.placas,
     r.marca,
     r.modelo,
+    mod,
     r.rentaCliente,
     r.rentaId,
     r.colaboradorNombre,
@@ -94,6 +182,41 @@ function coincideBusquedaRegistro(r: CheckinOutRegistro, q: string): boolean {
   if (!t) return true;
   const hay = textoBusquedaRegistro(r);
   return t.split(/\s+/).every((p) => p.length > 0 && hay.includes(p));
+}
+
+function TriPick({ label, value, onChange }: { label: string; value: Tri; onChange: (v: Tri) => void }) {
+  const opts: { v: Tri; short: string; long: string; title: string }[] = [
+    { v: 'ok', short: '✓', long: 'Bien', title: 'Bien (correcto)' },
+    { v: 'mal', short: '✗', long: 'Mal', title: 'Mal (requiere atención)' },
+    { v: 'na', short: 'N', long: 'N/A', title: 'No aplica' },
+  ];
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100/80 py-2.5 last:border-b-0 even:bg-slate-50/40">
+      <span className="max-w-[min(100%,280px)] text-sm font-medium leading-snug text-slate-800">{label}</span>
+      <div className="flex shrink-0 gap-1" role="group" aria-label={`Estado: ${label}`}>
+        {opts.map(({ v, short, long, title: aria }) => (
+          <button
+            key={v}
+            type="button"
+            title={aria}
+            onClick={() => onChange(v)}
+            className={`rounded-lg border px-2 py-1.5 text-xs font-semibold transition-colors sm:min-w-[4.25rem] ${
+              value === v
+                ? v === 'ok'
+                  ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm'
+                  : v === 'mal'
+                    ? 'border-rose-600 bg-rose-600 text-white shadow-sm'
+                    : 'border-slate-500 bg-slate-600 text-white shadow-sm'
+                : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
+            <span className="sm:hidden">{short}</span>
+            <span className="hidden sm:inline">{long}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function CheckInOut() {
@@ -120,6 +243,24 @@ export function CheckInOut() {
   const [combustiblePct, setCombustiblePct] = useState('');
   const [checklist, setChecklist] = useState<ChecklistItemPayload[]>(() => buildChecklist());
   const [observaciones, setObservaciones] = useState('');
+  const [modalidad, setModalidad] = useState<CheckinOutModalidad>('caja_seca');
+  const [inspeccion, setInspeccion] = useState<InspeccionCompleta>(() => defaultInspeccionCompleta());
+  const [fotosPendientes, setFotosPendientes] = useState<File[]>([]);
+
+  const registroEditando = useMemo(
+    () => (editandoId ? (registros.find((r) => r.id === editandoId) ?? null) : null),
+    [editandoId, registros]
+  );
+
+  const fotosPendientesUrls = useMemo(
+    () => fotosPendientes.map((f) => URL.createObjectURL(f)),
+    [fotosPendientes]
+  );
+  useEffect(() => {
+    return () => {
+      for (const u of fotosPendientesUrls) URL.revokeObjectURL(u);
+    };
+  }, [fotosPendientesUrls]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -150,6 +291,18 @@ export function CheckInOut() {
       setChecklist(buildChecklist(unidadSel.tipoUnidad));
       setKilometraje(String(unidadSel.kilometraje ?? ''));
       setCombustiblePct(String(unidadSel.combustiblePct ?? ''));
+      setModalidad(defaultModalidadPorTipoUnidad(unidadSel.tipoUnidad));
+      const fresh = defaultInspeccionCompleta();
+      fresh.header.hojaPlacas = unidadSel.placas || '';
+      fresh.header.hojaKm = String(unidadSel.kilometraje ?? '');
+      fresh.header.hojaMarca = unidadSel.marca || '';
+      fresh.header.hojaTipo =
+        unidadSel.tipoUnidad === 'refrigerado'
+          ? 'Refrigerado'
+          : unidadSel.tipoUnidad === 'maquinaria'
+            ? 'Mulita'
+            : 'Caja seca / remolque';
+      setInspeccion(fresh);
     }
   }, [unidadSel?.id, unidadSel?.tipoUnidad, editandoId]);
 
@@ -195,6 +348,9 @@ export function CheckInOut() {
     setChecklist(buildChecklist());
     setKilometraje('');
     setCombustiblePct('');
+    setModalidad('caja_seca');
+    setInspeccion(defaultInspeccionCompleta());
+    setFotosPendientes([]);
   }
 
   function cerrarModal() {
@@ -217,6 +373,9 @@ export function CheckInOut() {
     setChecklist(
       reg.checklist && reg.checklist.length > 0 ? reg.checklist : buildChecklist(u?.tipoUnidad)
     );
+    setModalidad(reg.modalidad ?? 'caja_seca');
+    setInspeccion(mergeInspeccionGuardada(reg.inspeccion));
+    setFotosPendientes([]);
   }
 
   async function eliminarRegistro(reg: CheckinOutRegistro, ev: React.MouseEvent) {
@@ -260,13 +419,24 @@ export function CheckInOut() {
         combustiblePct: combustiblePct === '' ? undefined : combustiblePct,
         checklist,
         observaciones: observaciones.trim(),
+        modalidad,
+        inspeccion: inspeccion as unknown as Record<string, unknown>,
       };
+      let registro: CheckinOutRegistro;
       if (editandoId) {
-        await updateCheckinOutRegistro(editandoId, payload);
+        registro = await updateCheckinOutRegistro(editandoId, payload);
         toast('Registro actualizado');
       } else {
-        await createCheckinOutRegistro(payload);
+        registro = await createCheckinOutRegistro(payload);
         toast(modalTipo === 'checkin' ? 'Check-in registrado' : 'Check-out registrado');
+      }
+      if (fotosPendientes.length > 0) {
+        let u = registro;
+        for (const file of fotosPendientes) {
+          u = await uploadCheckinOutImagen(registro.id, file);
+        }
+        registro = u;
+        toast(`${fotosPendientes.length} foto(s) de evidencia subida(s)`);
       }
       cerrarModal();
       cargar();
@@ -277,47 +447,137 @@ export function CheckInOut() {
     }
   }
 
+  function setTriCaja(id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      cajaSeca: { ...prev.cajaSeca, items: { ...prev.cajaSeca.items, [id]: v } },
+    }));
+  }
+
+  function setTriMulita(id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      mulita: { ...prev.mulita, items: { ...prev.mulita.items, [id]: v } },
+    }));
+  }
+
+  function setTriRefPrueba(id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      refrigeracion: {
+        ...prev.refrigeracion,
+        prueba: { ...prev.refrigeracion.prueba, [id]: v },
+      },
+    }));
+  }
+
+  const renderMulitaSecciones = (secs: MulitaSeccionDef[]) =>
+    secs.map((sec) => (
+      <div
+        key={sec.titulo}
+        className={`rounded-lg bg-white p-3 shadow-sm ${
+          sec.clave
+            ? 'border-2 border-amber-300 ring-1 ring-amber-200/90 lg:col-span-2'
+            : 'border border-skyline-border'
+        }`}
+      >
+        {sec.clave && (
+          <p className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-medium text-amber-950">
+            Clave en mulitas: quinta rueda y acople con el remolque.
+          </p>
+        )}
+        <p className="mb-2 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-skyline-blue">
+          {sec.titulo}
+        </p>
+        <div className="space-y-0.5 pr-1">
+          {sec.items.map((it) => (
+            <TriPick
+              key={it.id}
+              label={it.label}
+              value={inspeccion.mulita.items[it.id] ?? ''}
+              onChange={(v) => setTriMulita(it.id, v)}
+            />
+          ))}
+        </div>
+      </div>
+    ));
+
+  async function quitarFotoGuardada(imgId: string) {
+    if (!editandoId) return;
+    try {
+      const u = await deleteCheckinOutImagen(editandoId, imgId);
+      toast('Foto eliminada');
+      setRegistros((prev) => prev.map((x) => (x.id === u.id ? u : x)));
+      abrirEditar(u);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Error', 'error');
+    }
+  }
+
+  function patchHeader(patch: Partial<InspeccionCompleta['header']>) {
+    setInspeccion((prev) => ({ ...prev, header: { ...prev.header, ...patch } }));
+  }
+
+  const tituloBloqueInspeccion =
+    modalidad === 'caja_seca'
+      ? 'Caja seca (hoja SKYLINE): checklist completo, tabla de llantas y daños / croquis'
+      : modalidad === 'refrigerado'
+        ? 'Refrigerado: unidad de refrigeración, control de temperatura y prueba de funcionamiento'
+        : 'Mulita de patio: hoja de inspección (datos generales, quinta rueda, llantas, frenos, prueba operativa)';
+
   return (
-    <div>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Check-in / Check-out</h1>
-          <p className="mt-1 text-sm font-medium text-gray-500">
-            Entrega y recepción con colaborador, unidad, renta opcional e inventario de material según tipo de equipo
+    <div className="space-y-6">
+      <header className="flex flex-col gap-5 rounded-2xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/80 p-5 shadow-sm ring-1 ring-slate-900/[0.04] sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-slate-500">
+            <Icon icon="mdi:clipboard-flow-outline" className="size-6 shrink-0 text-skyline-blue" aria-hidden />
+            <span className="text-xs font-semibold uppercase tracking-wider">Operaciones</span>
+          </div>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Check-in / Check-out</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
+            Registra recepción y entrega de unidades: colaborador, lecturas, hoja de inspección (caja seca,
+            refrigerado o mulita), evidencia en fotos e inventario de material.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:items-stretch lg:flex-row">
           <button
             type="button"
-            className="btn btn-outline"
+            className="btn inline-flex items-center justify-center gap-2 border-2 border-emerald-600 bg-emerald-50 font-semibold text-emerald-900 shadow-sm hover:bg-emerald-100 disabled:opacity-50"
             disabled={soloLectura}
             onClick={() => abrirModal('checkin')}
           >
-            <Icon icon="mdi:clipboard-arrow-left" className="size-5" aria-hidden />
-            Check-in
+            <Icon icon="mdi:login" className="size-5" aria-hidden />
+            Check-in (recepción)
           </button>
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary inline-flex items-center justify-center gap-2 font-semibold shadow-md"
             disabled={soloLectura}
             onClick={() => abrirModal('checkout')}
           >
-            <Icon icon="mdi:clipboard-arrow-right" className="size-5" aria-hidden />
-            Check-out
+            <Icon icon="mdi:logout" className="size-5" aria-hidden />
+            Check-out (entrega)
           </button>
         </div>
       </header>
 
       {soloLectura && (
-        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-          Tu rol solo permite consultar. No puedes registrar check-in ni check-out.
+        <div className="rounded-xl border border-amber-200/80 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-sm">
+          <span className="font-semibold">Solo lectura.</span> Tu rol permite consultar registros; no puedes crear ni
+          editar check-in / check-out.
         </div>
       )}
 
-      <div className="rounded-lg border border-skyline-border bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-skyline-border px-4 py-3">
-          <h2 className="text-lg font-semibold text-gray-900">Registros recientes</h2>
-            <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:ml-auto sm:w-auto">
+      <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm ring-1 ring-slate-900/[0.04]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/80 px-4 py-4 sm:px-5">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Historial de registros</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Cada fila resume movimiento, tipo de hoja, unidad y quién participó. Clic en la fila para abrir el
+              detalle.
+            </p>
+          </div>
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:ml-auto sm:w-auto">
             {!loading && registros.length > 0 && (
               <span className="text-sm text-gray-500">
                 Mostrando{' '}
@@ -338,9 +598,9 @@ export function CheckInOut() {
         </div>
 
         {!loading && (
-          <div className="flex flex-col gap-3 border-b border-skyline-border bg-skyline-bg/50 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-50/50 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-end sm:px-5">
             <div className="min-w-[min(100%,200px)] flex-1">
-              <label htmlFor="cio-busqueda" className="mb-1 block text-xs font-medium text-gray-600">
+              <label htmlFor="cio-busqueda" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
                 Buscar
               </label>
               <input
@@ -354,8 +614,8 @@ export function CheckInOut() {
               />
             </div>
             <div className="min-w-[130px]">
-              <label htmlFor="cio-tipo" className="mb-1 block text-xs font-medium text-gray-600">
-                Tipo
+              <label htmlFor="cio-tipo" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Movimiento
               </label>
               <select
                 id="cio-tipo"
@@ -369,7 +629,7 @@ export function CheckInOut() {
               </select>
             </div>
             <div className="min-w-[160px]">
-              <label htmlFor="cio-unidad" className="mb-1 block text-xs font-medium text-gray-600">
+              <label htmlFor="cio-unidad" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
                 Unidad
               </label>
               <select
@@ -395,70 +655,94 @@ export function CheckInOut() {
         )}
 
         {loading ? (
-          <p className="p-8 text-center text-sm text-skyline-muted">Cargando…</p>
+          <p className="p-10 text-center text-sm font-medium text-slate-500">Cargando registros…</p>
         ) : registros.length === 0 ? (
-          <p className="p-8 text-center text-sm text-skyline-muted">
-            Aún no hay registros. Usa Check-in o Check-out para el primero.
+          <p className="p-10 text-center text-sm text-slate-600">
+            Aún no hay registros. Usa <span className="font-semibold text-emerald-800">Check-in</span> o{' '}
+            <span className="font-semibold text-blue-800">Check-out</span> arriba para el primero.
           </p>
         ) : registrosFiltrados.length === 0 ? (
-          <p className="p-8 text-center text-sm text-skyline-muted">
-            No hay registros que coincidan con la búsqueda o los filtros.
+          <p className="p-10 text-center text-sm text-slate-600">
+            No hay registros que coincidan. Prueba otro texto de búsqueda o limpia los filtros.
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="border-b border-skyline-border bg-skyline-bg text-xs font-semibold uppercase tracking-wide text-skyline-muted">
+            <table className="w-full min-w-[820px] text-left text-sm">
+              <thead className="border-b border-slate-200 bg-slate-100/90 text-[11px] font-bold uppercase tracking-wider text-slate-600">
                 <tr>
-                  <th className="px-4 py-2">Fecha</th>
-                  <th className="px-4 py-2">Tipo</th>
-                  <th className="px-4 py-2">Unidad</th>
-                  <th className="px-4 py-2">Renta / cliente</th>
-                  <th className="px-4 py-2">Colaborador</th>
-                  <th className="px-4 py-2">Registró</th>
-                  <th className="px-4 py-2">Km / comb.</th>
-                  <th className="px-4 py-2 text-right">Acciones</th>
+                  <th className="px-4 py-3">Fecha</th>
+                  <th className="px-4 py-3">Movimiento</th>
+                  <th className="hidden px-4 py-3 md:table-cell">Hoja</th>
+                  <th className="px-4 py-3">Unidad</th>
+                  <th className="px-4 py-3">Renta / cliente</th>
+                  <th className="px-4 py-3">Colaborador</th>
+                  <th className="hidden px-4 py-3 lg:table-cell">Registró</th>
+                  <th className="px-4 py-3">Km / comb.</th>
+                  <th className="px-4 py-3 text-right">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-skyline-border">
-                {registrosFiltrados.map((r) => (
+              <tbody className="divide-y divide-slate-100">
+                {registrosFiltrados.map((r) => {
+                  const { fecha, hora } = fechaRegistroPartes(r.creadoEn);
+                  const nFotos = r.imagenes?.length ?? 0;
+                  const mod = r.modalidad ?? 'caja_seca';
+                  return (
                   <tr
                     key={r.id}
-                    className={soloLectura ? 'hover:bg-gray-50/80' : 'cursor-pointer hover:bg-gray-50/80'}
+                    className={
+                      (soloLectura ? '' : 'cursor-pointer ') +
+                      'border-l-[3px] transition-colors hover:bg-slate-50/90 ' +
+                      (r.tipo === 'checkin' ? 'border-l-emerald-500' : 'border-l-blue-500')
+                    }
                     onClick={() => !soloLectura && abrirEditar(r)}
                   >
-                    <td className="whitespace-nowrap px-4 py-2 text-gray-600">{formatFechaRegistro(r.creadoEn)}</td>
-                    <td className="px-4 py-2">
+                    <td className="px-4 py-3 text-slate-700">
+                      <span className="block text-[13px] font-semibold leading-tight text-slate-900">{fecha}</span>
+                      {hora ? <span className="text-xs text-slate-500">{hora}</span> : null}
+                    </td>
+                    <td className="px-4 py-3">
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${
                           r.tipo === 'checkin'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-blue-100 text-blue-800'
+                            ? 'bg-emerald-100 text-emerald-900'
+                            : 'bg-blue-100 text-blue-900'
                         }`}
                       >
                         <Icon
                           icon={r.tipo === 'checkin' ? 'mdi:login' : 'mdi:logout'}
-                          className="size-3.5"
+                          className="size-3.5 shrink-0"
                           aria-hidden
                         />
-                        {r.tipo === 'checkin' ? 'Check-in' : 'Check-out'}
+                        {r.tipo === 'checkin' ? 'Entrada' : 'Salida'}
                       </span>
                     </td>
-                    <td className="px-4 py-2 font-medium text-gray-900">
-                      {r.placas}
-                      <span className="block text-xs font-normal text-gray-500">
+                    <td className="hidden max-w-[200px] px-4 py-3 md:table-cell">
+                      <div className="flex flex-col gap-1.5">
+                        <ModalidadPill m={mod} />
+                        {nFotos > 0 ? (
+                          <span className="inline-flex w-fit items-center gap-1 rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-900">
+                            <Icon icon="mdi:image-multiple" className="size-3" aria-hidden />
+                            {nFotos} foto{nFotos !== 1 ? 's' : ''}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="font-mono text-base font-bold tracking-wide text-slate-900">{r.placas}</span>
+                      <span className="mt-0.5 block text-xs text-slate-600">
                         {r.marca} {r.modelo}
                       </span>
                     </td>
-                    <td className="max-w-[180px] px-4 py-2 text-gray-600">
+                    <td className="max-w-[180px] px-4 py-3 text-slate-600">
                       {r.rentaCliente ? (
                         <>
-                          <span className="block truncate" title={r.rentaCliente}>
+                          <span className="block truncate text-sm font-medium text-slate-800" title={r.rentaCliente}>
                             {r.rentaCliente}
                           </span>
                           {r.rentaId && (
                             <Link
                               to={`/rentas/${r.rentaId}`}
-                              className="btn btn-outline btn-sm no-underline"
+                              className="btn btn-outline btn-sm mt-1 no-underline"
                               onClick={(e) => e.stopPropagation()}
                             >
                               Expediente
@@ -466,24 +750,24 @@ export function CheckInOut() {
                           )}
                         </>
                       ) : (
-                        <span className="text-gray-400">—</span>
+                        <span className="text-slate-400">—</span>
                       )}
                     </td>
-                    <td className="max-w-[160px] px-4 py-2 text-gray-600">
-                      {r.colaboradorNombre || '—'}
+                    <td className="max-w-[160px] px-4 py-3 text-slate-600">
+                      <span className="text-sm">{r.colaboradorNombre || '—'}</span>
                       {r.colaboradorRol && (
-                        <span className="block text-xs text-gray-400">
+                        <span className="mt-0.5 block text-xs text-slate-500">
                           {ROLES_COLABORADOR.find((x) => x.v === r.colaboradorRol)?.l ?? r.colaboradorRol}
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-gray-600">{r.usuarioNombre || '—'}</td>
-                    <td className="whitespace-nowrap px-4 py-2 text-xs text-gray-600">
-                      {r.kilometraje != null ? `${r.kilometraje.toLocaleString('es-MX')} km` : '—'}
-                      <br />
-                      {r.combustiblePct != null ? `${r.combustiblePct}%` : '—'}
+                    <td className="hidden px-4 py-3 text-slate-600 lg:table-cell">{r.usuarioNombre || '—'}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-700">
+                      <span className="font-medium">{r.kilometraje != null ? `${r.kilometraje.toLocaleString('es-MX')} km` : '—'}</span>
+                      <span className="mx-1 text-slate-300">·</span>
+                      <span>{r.combustiblePct != null ? `${r.combustiblePct}% comb.` : '—'}</span>
                     </td>
-                    <td className="px-4 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       {soloLectura ? (
                         <span className="text-xs text-gray-400">—</span>
                       ) : (
@@ -506,7 +790,8 @@ export function CheckInOut() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -515,33 +800,85 @@ export function CheckInOut() {
 
       {modalTipo && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-10"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/55 p-4 pt-8 backdrop-blur-[2px] sm:pt-10"
           onClick={cerrarModal}
         >
           <div
-            className="notif-menu-open mb-10 w-full max-w-lg rounded-xl border border-skyline-border bg-white shadow-xl"
+            className="notif-menu-open mb-10 w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-2xl ring-1 ring-slate-900/10"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="border-b border-skyline-border bg-skyline-bg px-5 py-4">
-              <h3 className="text-lg font-semibold text-gray-900">
-                {editandoId
-                  ? 'Editar registro check-in / check-out'
-                  : modalTipo === 'checkin'
-                    ? 'Check-in (recepción)'
-                    : 'Check-out (entrega)'}
-              </h3>
-              <p className="text-sm text-gray-500">
-                {editandoId
-                  ? 'Modifica los datos y guarda. El usuario que registró originalmente no cambia.'
-                  : `Completa unidad, colaborador, lecturas e inventario. Se guarda en historial de la unidad${
-                      modalTipo === 'checkout' ? ' y en la renta si la vinculas.' : '.'
-                    }`}
-              </p>
+            <div
+              className={`px-5 py-5 text-white sm:px-6 sm:py-6 ${
+                modalTipo === 'checkin'
+                  ? 'bg-gradient-to-br from-emerald-800 via-emerald-600 to-teal-600'
+                  : 'bg-gradient-to-br from-blue-800 via-blue-600 to-indigo-700'
+              }`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex min-w-0 flex-1 items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/15 shadow-inner backdrop-blur-sm">
+                    <Icon
+                      icon={modalTipo === 'checkin' ? 'mdi:login' : 'mdi:logout'}
+                      className="size-7 text-white"
+                      aria-hidden
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-white/75">
+                      {editandoId ? 'Edición de registro' : 'Nuevo registro'}
+                    </p>
+                    <h3 className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">
+                      {editandoId
+                        ? 'Check-in / Check-out'
+                        : modalTipo === 'checkin'
+                          ? 'Recepción de unidad (check-in)'
+                          : 'Entrega de unidad (check-out)'}
+                    </h3>
+                    <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/90">
+                      {editandoId
+                        ? 'Ajusta lo necesario y guarda. El usuario que creó el registro no cambia.'
+                        : modalTipo === 'checkout'
+                          ? 'Queda en historial de la unidad y, si vinculas renta, queda ligado al expediente del cliente.'
+                          : 'Queda en historial de la unidad con inspección, fotos y material revisado.'}
+                    </p>
+                  </div>
+                </div>
+                {unidadSel ? (
+                  <div className="shrink-0 rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-right shadow-lg backdrop-blur-sm">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-white/70">Unidad</p>
+                    <p className="font-mono text-xl font-bold tracking-wide">{unidadSel.placas}</p>
+                    <p className="text-sm text-white/85">
+                      {unidadSel.marca} {unidadSel.modelo}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
             </div>
-            <form onSubmit={enviar} className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-4">
+            <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5 sm:px-6">
+              <Icon icon="mdi:clipboard-list-outline" className="hidden size-4 text-slate-400 sm:block" aria-hidden />
+              <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Resumen</span>
+              <ModalidadPill m={modalidad} />
+              {unidadSel?.tipoUnidad === 'refrigerado' ? (
+                <span className="rounded-md bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-900">
+                  Catálogo: refrigerado
+                </span>
+              ) : null}
+              {unidadSel?.tipoUnidad === 'maquinaria' ? (
+                <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-950">
+                  Catálogo: mulita
+                </span>
+              ) : null}
+            </div>
+            <form onSubmit={enviar} className="max-h-[min(85vh,920px)] space-y-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+              <FormSection
+                step={1}
+                title="Movimiento y unidad"
+                hint="Unidad, renta opcional, colaborador y lecturas de odómetro / combustible del tractor o equipo."
+                icon="mdi:truck-check-outline"
+              >
               {editandoId && (
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Tipo de movimiento</label>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">Tipo de movimiento</label>
                   <select
                     value={modalTipo || 'checkin'}
                     onChange={(e) => setModalTipo(e.target.value as 'checkin' | 'checkout')}
@@ -568,7 +905,7 @@ export function CheckInOut() {
                   {unidades.map((u) => (
                     <option key={u.id} value={u.id}>
                       {u.placas} — {u.marca} {u.modelo} ({u.estatus})
-                      {u.tipoUnidad === 'refrigerado' ? ' · Ref.' : u.tipoUnidad === 'maquinaria' ? ' · Máq.' : ''}
+                      {u.tipoUnidad === 'refrigerado' ? ' · Ref.' : u.tipoUnidad === 'maquinaria' ? ' · Mul.' : ''}
                     </option>
                   ))}
                 </select>
@@ -646,54 +983,785 @@ export function CheckInOut() {
                   />
                 </div>
               </div>
+              </FormSection>
 
+              <FormSection
+                step={2}
+                title="Encabezado de la hoja"
+                hint="Encabezado tipo hoja física. Con «Caja seca» aparecen también Placas, KM, Marca y Tipo del formato SKYLINE."
+                icon="mdi:file-document-edit-outline"
+              >
               <div>
-                <p className="mb-2 text-sm font-medium text-gray-700">
+                <label className="mb-1 block text-sm font-medium text-slate-800">Tipo de inspección (hoja)</label>
+                <select
+                  value={modalidad}
+                  onChange={(e) => setModalidad(e.target.value as CheckinOutModalidad)}
+                  className="input w-full"
+                >
+                  {(Object.keys(MODALIDAD_LABEL) as CheckinOutModalidad[]).map((k) => (
+                    <option key={k} value={k}>
+                      {MODALIDAD_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Elige la hoja que aplica. Los datos de las tres modalidades se conservan si cambias de opción.
+                </p>
+              </div>
+
+              <fieldset className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:p-4">
+                <legend className="px-2 text-xs font-bold uppercase tracking-wide text-slate-600">
+                  Datos generales y cierre
+                </legend>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="sm:col-span-2 lg:col-span-1">
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Folio</label>
+                    <input
+                      type="text"
+                      value={inspeccion.header.folio}
+                      onChange={(e) => patchHeader({ folio: e.target.value })}
+                      className="input w-full text-sm"
+                      placeholder="Ej. 351"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Fecha inspección</label>
+                    <input
+                      type="date"
+                      value={inspeccion.header.fechaInspeccion}
+                      onChange={(e) => patchHeader({ fechaInspeccion: e.target.value })}
+                      className="input w-full text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Conductor / operador</label>
+                    <input
+                      type="text"
+                      value={inspeccion.header.conductor}
+                      onChange={(e) => patchHeader({ conductor: e.target.value })}
+                      className="input w-full text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Nº económico</label>
+                    <input
+                      type="text"
+                      value={inspeccion.header.nEconomico}
+                      onChange={(e) => patchHeader({ nEconomico: e.target.value })}
+                      className="input w-full text-sm"
+                    />
+                  </div>
+                  {modalidad === 'caja_seca' && (
+                    <>
+                      <div>
+                        <label className="mb-0.5 block text-xs font-medium text-gray-600">Placas (hoja)</label>
+                        <input
+                          type="text"
+                          value={inspeccion.header.hojaPlacas}
+                          onChange={(e) => patchHeader({ hojaPlacas: e.target.value })}
+                          className="input w-full text-sm"
+                          placeholder="Como en el formato impreso"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-0.5 block text-xs font-medium text-gray-600">KM (hoja)</label>
+                        <input
+                          type="text"
+                          value={inspeccion.header.hojaKm}
+                          onChange={(e) => patchHeader({ hojaKm: e.target.value })}
+                          className="input w-full text-sm"
+                          placeholder="Kilometraje en la hoja"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-0.5 block text-xs font-medium text-gray-600">Marca (hoja)</label>
+                        <input
+                          type="text"
+                          value={inspeccion.header.hojaMarca}
+                          onChange={(e) => patchHeader({ hojaMarca: e.target.value })}
+                          className="input w-full text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-0.5 block text-xs font-medium text-gray-600">Tipo (hoja)</label>
+                        <input
+                          type="text"
+                          value={inspeccion.header.hojaTipo}
+                          onChange={(e) => patchHeader({ hojaTipo: e.target.value })}
+                          className="input w-full text-sm"
+                          placeholder="Ej. 53' caja seca"
+                        />
+                      </div>
+                    </>
+                  )}
+                  <div>
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Camión / tractor</label>
+                    <input
+                      type="text"
+                      value={inspeccion.header.camion}
+                      onChange={(e) => patchHeader({ camion: e.target.value })}
+                      className="input w-full text-sm"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">
+                      Nivel combustible (E / ½ / F u otro)
+                    </label>
+                    <input
+                      type="text"
+                      value={inspeccion.header.nivelCombustibleEscala}
+                      onChange={(e) => patchHeader({ nivelCombustibleEscala: e.target.value })}
+                      className="input w-full text-sm"
+                      placeholder="Ej. ¾, mitad…"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">
+                      Detalles a reparar / refacciones (hoja)
+                    </label>
+                    <textarea
+                      value={inspeccion.header.descripcionReparar}
+                      onChange={(e) => patchHeader({ descripcionReparar: e.target.value })}
+                      className="input min-h-[56px] w-full resize-y text-sm"
+                      rows={2}
+                      placeholder="Descripción previa de detalles a reparar"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Refacciones a utilizar</label>
+                    <textarea
+                      value={inspeccion.header.refacciones}
+                      onChange={(e) => patchHeader({ refacciones: e.target.value })}
+                      className="input min-h-[56px] w-full resize-y text-sm"
+                      rows={2}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Mecánico asignado</label>
+                    <input
+                      type="text"
+                      value={inspeccion.header.mecanicoAsignado}
+                      onChange={(e) => patchHeader({ mecanicoAsignado: e.target.value })}
+                      className="input w-full text-sm"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Firma de conformidad</label>
+                    <input
+                      type="text"
+                      value={inspeccion.header.firmaConformidad}
+                      onChange={(e) => patchHeader({ firmaConformidad: e.target.value })}
+                      className="input w-full text-sm"
+                      placeholder="Nombre o indicación de firma"
+                    />
+                  </div>
+                </div>
+              </fieldset>
+              </FormSection>
+
+              <FormSection
+                step={3}
+                title="Contenido de la inspección"
+                hint={tituloBloqueInspeccion}
+                icon="mdi:clipboard-check-multiple-outline"
+              >
+              {modalidad === 'caja_seca' && (
+                <div className="space-y-4">
+                  <p className="text-xs leading-relaxed text-slate-600">
+                    <span className="font-semibold uppercase tracking-wide text-slate-500">Hoja SKYLINE · caja seca.</span>{' '}
+                    Marca cada ítem: <strong>Bien</strong> (✔), <strong>Mal</strong> (X) o <strong>N/A</strong>, como en el
+                    formato impreso. Describe daños o croquis de carrocería al final.
+                  </p>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {CAJA_SECA_SECCIONES.map((sec) => (
+                      <div
+                        key={sec.titulo}
+                        className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-900/[0.03]"
+                      >
+                        <p className="mb-2 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-skyline-blue">
+                          {sec.titulo}
+                        </p>
+                        <div className="max-h-96 overflow-y-auto pr-1">
+                          {sec.items.map((it) => (
+                            <TriPick
+                              key={it.id}
+                              label={it.label}
+                              value={inspeccion.cajaSeca.items[it.id] ?? ''}
+                              onChange={(v) => setTriCaja(it.id, v)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-gray-800">Llantas</p>
+                    <div className="overflow-x-auto rounded-lg border border-skyline-border">
+                      <table className="w-full min-w-[640px] text-left text-xs">
+                        <thead className="bg-skyline-bg font-semibold text-gray-600">
+                          <tr>
+                            <th className="px-2 py-1.5">No.</th>
+                            <th className="px-2 py-1.5">Posición</th>
+                            <th className="px-2 py-1.5">Marca</th>
+                            <th className="px-2 py-1.5">Modelo</th>
+                            <th className="px-2 py-1.5">MM</th>
+                            <th className="px-2 py-1.5">Sellos</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-skyline-border">
+                          {inspeccion.cajaSeca.llantas.map((row, i) => (
+                            <tr key={i}>
+                              <td className="px-2 py-1 text-gray-500">{i + 1}</td>
+                              <td className="px-1 py-0.5">
+                                <input
+                                  className="input w-full py-1 text-xs"
+                                  value={row.posicion}
+                                  onChange={(e) =>
+                                    setInspeccion((p) => {
+                                      const ll = [...p.cajaSeca.llantas];
+                                      ll[i] = { ...ll[i], posicion: e.target.value };
+                                      return { ...p, cajaSeca: { ...p.cajaSeca, llantas: ll } };
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-1 py-0.5">
+                                <input
+                                  className="input w-full py-1 text-xs"
+                                  value={row.marca}
+                                  onChange={(e) =>
+                                    setInspeccion((p) => {
+                                      const ll = [...p.cajaSeca.llantas];
+                                      ll[i] = { ...ll[i], marca: e.target.value };
+                                      return { ...p, cajaSeca: { ...p.cajaSeca, llantas: ll } };
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-1 py-0.5">
+                                <input
+                                  className="input w-full py-1 text-xs"
+                                  value={row.modelo}
+                                  onChange={(e) =>
+                                    setInspeccion((p) => {
+                                      const ll = [...p.cajaSeca.llantas];
+                                      ll[i] = { ...ll[i], modelo: e.target.value };
+                                      return { ...p, cajaSeca: { ...p.cajaSeca, llantas: ll } };
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-1 py-0.5">
+                                <input
+                                  className="input w-full py-1 text-xs"
+                                  value={row.mm}
+                                  onChange={(e) =>
+                                    setInspeccion((p) => {
+                                      const ll = [...p.cajaSeca.llantas];
+                                      ll[i] = { ...ll[i], mm: e.target.value };
+                                      return { ...p, cajaSeca: { ...p.cajaSeca, llantas: ll } };
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-1 py-0.5">
+                                <input
+                                  className="input w-full py-1 text-xs"
+                                  value={row.sellos}
+                                  onChange={(e) =>
+                                    setInspeccion((p) => {
+                                      const ll = [...p.cajaSeca.llantas];
+                                      ll[i] = { ...ll[i], sellos: e.target.value };
+                                      return { ...p, cajaSeca: { ...p.cajaSeca, llantas: ll } };
+                                    })
+                                  }
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Daños de carrocería / notas (diagrama en papel)
+                    </label>
+                    <textarea
+                      value={inspeccion.cajaSeca.danosNotas}
+                      onChange={(e) =>
+                        setInspeccion((p) => ({
+                          ...p,
+                          cajaSeca: { ...p.cajaSeca, danosNotas: e.target.value },
+                        }))
+                      }
+                      className="input min-h-[72px] w-full resize-y text-sm"
+                      rows={3}
+                      placeholder="Describe daños o referencia a croquis…"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {modalidad === 'refrigerado' && (
+                <div className="space-y-5">
+                  <p className="text-xs leading-relaxed text-slate-600">
+                    Checklist de <strong>unidad de refrigeración</strong>: tres bloques como en operación —
+                    datos y condiciones del equipo, control de temperatura y prueba de funcionamiento (Bien · Mal · N/A
+                    donde aplique).
+                  </p>
+
+                  <section className="rounded-xl border-2 border-sky-200/90 bg-gradient-to-b from-white to-sky-50/40 p-4 shadow-sm">
+                    <h4 className="mb-3 flex items-center gap-2 border-b border-sky-100 pb-2 text-sm font-bold text-sky-950">
+                      <span className="flex size-7 items-center justify-center rounded-full bg-sky-600 text-xs text-white">
+                        1
+                      </span>
+                      Unidad de Refrigeración
+                    </h4>
+
+                    <div className="mb-5">
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Datos del equipo</p>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {(
+                          [
+                            ['marca', 'Marca de unidad (Thermo King / Carrier / etc.)'] as const,
+                            ['modelo', 'Modelo'] as const,
+                            ['numeroSerie', 'Número de serie'] as const,
+                            ['horasMotor', 'Horas de motor'] as const,
+                            ['tipoCombustible', 'Tipo de combustible'] as const,
+                          ] as const
+                        ).map(([k, lab]) => (
+                          <div key={k}>
+                            <label className="mb-0.5 block text-xs font-medium text-gray-700">{lab}</label>
+                            <input
+                              type="text"
+                              className="input w-full text-sm"
+                              value={inspeccion.refrigeracion.equipo[k]}
+                              onChange={(e) =>
+                                setInspeccion((p) => ({
+                                  ...p,
+                                  refrigeracion: {
+                                    ...p.refrigeracion,
+                                    equipo: { ...p.refrigeracion.equipo, [k]: e.target.value },
+                                  },
+                                }))
+                              }
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Condiciones</p>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {(
+                          [
+                            ['nivelDiesel', 'Nivel de diésel de la unidad'] as const,
+                            ['nivelAceite', 'Nivel de aceite'] as const,
+                            ['nivelAnticongelante', 'Nivel de anticongelante'] as const,
+                            ['estadoBateria', 'Estado de batería'] as const,
+                          ] as const
+                        ).map(([k, lab]) => (
+                          <div key={k}>
+                            <label className="mb-0.5 block text-xs font-medium text-gray-700">{lab}</label>
+                            <input
+                              type="text"
+                              className="input w-full text-sm"
+                              value={inspeccion.refrigeracion.condiciones[k]}
+                              onChange={(e) =>
+                                setInspeccion((p) => ({
+                                  ...p,
+                                  refrigeracion: {
+                                    ...p.refrigeracion,
+                                    condiciones: {
+                                      ...p.refrigeracion.condiciones,
+                                      [k]: e.target.value,
+                                    },
+                                  },
+                                }))
+                              }
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-3 mb-1 text-xs font-semibold text-gray-700">Fugas visibles (aceite / refrigerante)</p>
+                      <p className="mb-2 text-[11px] text-gray-500">
+                        <strong>Bien</strong> = sin fuga visible · <strong>Mal</strong> = con fuga · <strong>N/A</strong> si no aplica revisar.
+                      </p>
+                      <TriPick
+                        label="Aceite"
+                        value={inspeccion.refrigeracion.condiciones.fugaAceite}
+                        onChange={(v) =>
+                          setInspeccion((p) => ({
+                            ...p,
+                            refrigeracion: {
+                              ...p.refrigeracion,
+                              condiciones: { ...p.refrigeracion.condiciones, fugaAceite: v },
+                            },
+                          }))
+                        }
+                      />
+                      <TriPick
+                        label="Refrigerante"
+                        value={inspeccion.refrigeracion.condiciones.fugaRefrigerante}
+                        onChange={(v) =>
+                          setInspeccion((p) => ({
+                            ...p,
+                            refrigeracion: {
+                              ...p.refrigeracion,
+                              condiciones: { ...p.refrigeracion.condiciones, fugaRefrigerante: v },
+                            },
+                          }))
+                        }
+                      />
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <h4 className="mb-3 flex items-center gap-2 border-b border-slate-100 pb-2 text-sm font-bold text-slate-900">
+                      <span className="flex size-7 items-center justify-center rounded-full bg-slate-700 text-xs text-white">
+                        2
+                      </span>
+                      Control de Temperatura
+                    </h4>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {(
+                        [
+                          ['setPoint', 'Temperatura programada (Set Point)'] as const,
+                          ['tempActual', 'Temperatura actual'] as const,
+                          [
+                            'modoOperacion',
+                            'Modo de operación (Continuo / Start-Stop)',
+                          ] as const,
+                          ['lecturaDisplay', 'Lectura del display'] as const,
+                          ['termografo', 'Funcionamiento del termógrafo (si tiene)'] as const,
+                          ['registroTemperatura', 'Registro de temperatura (Sí / No)'] as const,
+                        ] as const
+                      ).map(([k, lab]) => (
+                        <div key={k} className={k === 'lecturaDisplay' ? 'sm:col-span-2' : ''}>
+                          <label className="mb-0.5 block text-xs font-medium text-gray-700">{lab}</label>
+                          <input
+                            type="text"
+                            className="input w-full text-sm"
+                            value={inspeccion.refrigeracion.temperatura[k]}
+                            onChange={(e) =>
+                              setInspeccion((p) => ({
+                                ...p,
+                                refrigeracion: {
+                                  ...p.refrigeracion,
+                                  temperatura: {
+                                    ...p.refrigeracion.temperatura,
+                                    [k]: e.target.value,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <h4 className="mb-3 flex items-center gap-2 border-b border-slate-100 pb-2 text-sm font-bold text-slate-900">
+                      <span className="flex size-7 items-center justify-center rounded-full bg-emerald-700 text-xs text-white">
+                        3
+                      </span>
+                      Prueba de Funcionamiento
+                    </h4>
+                    <p className="mb-2 text-[11px] text-gray-500">
+                      Marque Bien · Mal · N/A según el comportamiento del equipo.
+                    </p>
+                    {REFRIGERACION_PRUEBA_IDS.map((it) => (
+                      <TriPick
+                        key={it.id}
+                        label={it.label}
+                        value={inspeccion.refrigeracion.prueba[it.id] ?? ''}
+                        onChange={(v) => setTriRefPrueba(it.id, v)}
+                      />
+                    ))}
+                  </section>
+                </div>
+              )}
+
+              {modalidad === 'mulita_patio' && (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-amber-100 bg-amber-50/40 px-3 py-3 sm:px-4">
+                    <h4 className="text-sm font-bold tracking-tight text-slate-900">
+                      Hoja de inspección — Mulita de patio
+                    </h4>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                      Marca cada punto como en el formato impreso: <strong>Bien</strong> (✔), <strong>Mal</strong> (X) o{' '}
+                      <strong>N/A</strong>. Los bloques siguen el orden de la hoja física (secc. 2–12; la 5 es llantas).
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+                    <p className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-skyline-blue">
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-skyline-blue/15 text-[11px] font-bold text-skyline-blue">
+                        1
+                      </span>
+                      Datos generales
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      <div>
+                        <label className="mb-0.5 block text-xs font-medium text-gray-600">Fecha</label>
+                        <input
+                          type="date"
+                          className="input w-full text-sm"
+                          value={inspeccion.header.fechaInspeccion}
+                          onChange={(e) => patchHeader({ fechaInspeccion: e.target.value })}
+                        />
+                      </div>
+                      {(
+                        [
+                          ['operador', 'Operador'] as const,
+                          ['nEconomico', 'No. económico'] as const,
+                          ['vinSerie', 'VIN / serie'] as const,
+                          ['marca', 'Marca (ej. Ottawa, Autocar)'] as const,
+                          ['modeloAnio', 'Modelo / año'] as const,
+                          ['horasUso', 'Horas de uso'] as const,
+                        ] as const
+                      ).map(([k, lab]) => (
+                        <div key={k}>
+                          <label className="mb-0.5 block text-xs font-medium text-gray-600">{lab}</label>
+                          <input
+                            type="text"
+                            className="input w-full text-sm"
+                            value={inspeccion.mulita.datos[k]}
+                            placeholder={k === 'marca' ? 'Ottawa, Autocar…' : undefined}
+                            onChange={(e) =>
+                              setInspeccion((p) => ({
+                                ...p,
+                                mulita: {
+                                  ...p.mulita,
+                                  datos: { ...p.mulita.datos, [k]: e.target.value },
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+                      ))}
+                      <div className="sm:col-span-2 lg:col-span-3">
+                        <label className="mb-0.5 block text-xs font-medium text-gray-600">Ubicación</label>
+                        <input
+                          type="text"
+                          className="input w-full text-sm"
+                          value={inspeccion.mulita.datos.ubicacion}
+                          onChange={(e) =>
+                            setInspeccion((p) => ({
+                              ...p,
+                              mulita: {
+                                ...p.mulita,
+                                datos: { ...p.mulita.datos, ubicacion: e.target.value },
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-2">{renderMulitaSecciones(MULITA_SECCIONES_HASTA_LLANTAS)}</div>
+                  <div>
+                    <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900">
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-800">
+                        5
+                      </span>
+                      Llantas
+                    </p>
+                    <div className="overflow-x-auto rounded-lg border border-skyline-border">
+                      <table className="w-full min-w-[520px] text-left text-xs">
+                        <thead className="bg-skyline-bg font-semibold text-gray-600">
+                          <tr>
+                            <th className="px-2 py-2">Posición</th>
+                            <th className="px-2 py-2">Estado / vida útil</th>
+                            <th className="px-2 py-2">Presión</th>
+                            <th className="px-2 py-2">Daños visibles</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-skyline-border">
+                          {inspeccion.mulita.llantas.map((row, i) => (
+                            <tr key={i}>
+                              {(['posicion', 'estado', 'presion', 'danos'] as const).map((field) => (
+                                <td key={field} className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row[field]}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.mulita.llantas];
+                                        ll[i] = { ...ll[i], [field]: e.target.value };
+                                        return { ...p, mulita: { ...p.mulita, llantas: ll } };
+                                      })
+                                    }
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-2">{renderMulitaSecciones(MULITA_SECCIONES_TRAS_LLANTAS)}</div>
+                </div>
+              )}
+              </FormSection>
+
+              <FormSection
+                step={4}
+                title="Evidencia fotográfica"
+                hint="Ideal en check-in: carrocería, equipo, placas o anomalías. Las fotos se adjuntan al guardar o al editar después."
+                icon="mdi:camera-outline"
+              >
+                <div className="rounded-xl border border-violet-100 bg-violet-50/35 p-3 sm:p-4">
+                  <p className="mb-3 text-xs leading-relaxed text-slate-600">
+                    Puedes seleccionar varias imágenes. Formatos habituales JPG / PNG desde teléfono o PC.
+                  </p>
+                {registroEditando && registroEditando.imagenes && registroEditando.imagenes.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-3">
+                    {registroEditando.imagenes.map((img) => (
+                      <div
+                        key={img.id}
+                        className="relative w-28 shrink-0 overflow-hidden rounded-lg border border-skyline-border bg-white shadow-sm"
+                      >
+                        <img
+                          src={getImagenUrl(img.ruta)}
+                          alt={img.nombreArchivo}
+                          className="h-24 w-full object-cover"
+                        />
+                        <p className="truncate px-1 py-0.5 text-[10px] text-gray-500" title={img.nombreArchivo}>
+                          {img.nombreArchivo}
+                        </p>
+                        {!soloLectura && (
+                          <button
+                            type="button"
+                            className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-red-700 shadow"
+                            onClick={() => quitarFotoGuardada(img.id)}
+                          >
+                            Quitar
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!soloLectura && (
+                  <>
+                    <label className="btn btn-outline inline-flex cursor-pointer items-center gap-2 text-sm">
+                      <Icon icon="mdi:camera-plus" className="size-5" aria-hidden />
+                      Añadir fotos
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files ?? []);
+                          if (files.length) setFotosPendientes((prev) => [...prev, ...files]);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                    {fotosPendientes.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-3">
+                        {fotosPendientes.map((file, idx) => (
+                          <div
+                            key={`${file.name}-${file.size}-${idx}`}
+                            className="w-28 shrink-0 overflow-hidden rounded-lg border border-skyline-border bg-white"
+                          >
+                            <img
+                              src={fotosPendientesUrls[idx]}
+                              alt=""
+                              className="h-24 w-full object-cover"
+                            />
+                            <div className="flex items-center justify-between gap-1 px-1 py-0.5">
+                              <span className="truncate text-[10px] text-gray-600" title={file.name}>
+                                {file.name}
+                              </span>
+                              <button
+                                type="button"
+                                className="shrink-0 text-[10px] text-red-600"
+                                onClick={() =>
+                                  setFotosPendientes((prev) => prev.filter((_, j) => j !== idx))
+                                }
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+                </div>
+              </FormSection>
+
+              <FormSection
+                step={5}
+                title="Inventario y observaciones"
+                hint="Lista de material que debe viajar con la unidad y notas libres (daños, acuerdos, incidencias)."
+                icon="mdi:package-variant-closed"
+              >
+              <div>
+                <p className="mb-2 text-sm font-semibold text-slate-800">
                   Inventario / material
                   {unidadSel?.tipoUnidad === 'refrigerado' && (
                     <span className="ml-2 font-normal text-skyline-blue">· ítems refrigerado incluidos</span>
                   )}
                   {unidadSel?.tipoUnidad === 'maquinaria' && (
-                    <span className="ml-2 font-normal text-skyline-blue">· ítems maquinaria incluidos</span>
+                    <span className="ml-2 font-normal text-skyline-blue">· ítems mulita incluidos</span>
                   )}
                 </p>
-                <ul className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-skyline-border p-3">
+                <ul className="max-h-52 space-y-1 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 sm:p-3">
                   {checklist.map((c) => (
-                    <li key={c.id}>
-                      <label className="flex cursor-pointer items-start gap-2 text-sm">
+                    <li
+                      key={c.id}
+                      className={`rounded-lg px-2 py-2 transition-colors ${c.presente ? 'bg-slate-50/80' : 'bg-amber-50/60'}`}
+                    >
+                      <label className="flex cursor-pointer items-start gap-3 text-sm">
                         <input
                           type="checkbox"
                           checked={c.presente}
                           onChange={() => toggleCheck(c.id)}
-                          className="mt-0.5 rounded border-gray-300"
+                          className="mt-1 size-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                         />
-                        <span className={c.presente ? 'text-gray-800' : 'text-amber-800 line-through opacity-80'}>
+                        <span
+                          className={
+                            c.presente ? 'font-medium text-slate-800' : 'text-amber-900 line-through opacity-90'
+                          }
+                        >
                           {c.label}
                         </span>
                       </label>
                     </li>
                   ))}
                 </ul>
-                <p className="mt-1 text-xs text-gray-500">Desmarca lo que falte o no aplique en este momento.</p>
+                <p className="mt-2 text-xs text-slate-500">
+                  <span className="font-semibold text-slate-600">Tip:</span> desmarca lo que falte; queda claro qué se
+                  revisó en este movimiento.
+                </p>
               </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Observaciones</label>
+              <div className="mt-5 border-t border-slate-100 pt-5">
+                <label className="mb-1 block text-sm font-semibold text-slate-800">Observaciones libres</label>
                 <textarea
                   value={observaciones}
                   onChange={(e) => setObservaciones(e.target.value)}
-                  className="input min-h-[80px] w-full resize-y"
-                  placeholder="Daños, faltantes, condiciones especiales…"
+                  className="input min-h-[88px] w-full resize-y"
+                  placeholder="Daños, faltantes, condiciones especiales, acuerdos con el cliente…"
                   rows={3}
                 />
               </div>
+              </FormSection>
 
-              <div className="flex justify-end gap-2 border-t border-skyline-border pt-4">
+              <div className="sticky bottom-0 -mx-4 flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50/95 px-4 py-4 backdrop-blur-sm sm:-mx-6 sm:px-6">
                 <button type="button" className="btn btn-outline" onClick={cerrarModal}>
-                  Cancelar
+                  Cerrar sin guardar
                 </button>
-                <button type="submit" className="btn btn-primary" disabled={enviando}>
-                  {enviando ? 'Guardando…' : editandoId ? 'Guardar cambios' : 'Registrar'}
+                <button type="submit" className="btn btn-primary min-w-[140px] font-semibold shadow-md" disabled={enviando}>
+                  {enviando ? 'Guardando…' : editandoId ? 'Guardar cambios' : 'Registrar movimiento'}
                 </button>
               </div>
             </form>

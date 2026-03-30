@@ -45,6 +45,7 @@ const TIPO_ETIQUETA: Record<ActividadItem['tipo'], string> = {
   auth: 'Sesión',
   sistema: 'Sistema',
   proveedor: 'Proveedor',
+  cliente: 'Cliente',
 };
 
 type FiltroTipo = 'todos' | ActividadItem['tipo'];
@@ -167,6 +168,17 @@ export function Actividad() {
                           className="text-skyline-blue hover:underline"
                         >
                           Ver expediente
+                        </Link>
+                      </>
+                    ) : null}
+                    {item.tipo === 'cliente' && item.clienteId ? (
+                      <>
+                        {' · '}
+                        <Link
+                          to={`/clientes/${item.clienteId}`}
+                          className="text-skyline-blue hover:underline"
+                        >
+                          Ver expediente cliente
                         </Link>
                       </>
                     ) : null}

@@ -8,6 +8,7 @@ import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { Unidades } from './pages/Unidades';
 import { Rentas } from './pages/Rentas';
+import { Clientes } from './pages/Clientes';
 import { RentaDetalle } from './pages/RentaDetalle';
 import { CheckInOut } from './pages/CheckInOut';
 import { Mantenimiento } from './pages/Mantenimiento';
@@ -43,6 +44,8 @@ function App() {
             <Route path="unidades" element={<Unidades />} />
             <Route path="rentas" element={<Rentas />} />
             <Route path="rentas/:id" element={<RentaDetalle />} />
+            <Route path="clientes" element={<Clientes />} />
+            <Route path="clientes/:id" element={<Clientes />} />
             <Route path="checkinout" element={<CheckInOut />} />
             <Route path="mantenimiento" element={<Mantenimiento />} />
             <Route

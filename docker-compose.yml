@@ -1,6 +1,7 @@
 # Skyline ERP — despliegue sencillo en Dokploy (Compose).
 # En Dokploy: crea un proyecto → Docker Compose → repo + este archivo.
-# Variables: solo JWT_SECRET (obligatorio).
+# Variables: JWT_SECRET (obligatorio). Opcional si la BD está vacía:
+# SKYLINE_INITIAL_ADMIN_PASSWORD — mín. 8 caracteres; crea admin@skyline.com al primer arranque. Quitar después.
 # Puerto HOST 8080 → contenedor 3000 (evita chocar con Dokploy, que suele usar :3000).
 
 services:

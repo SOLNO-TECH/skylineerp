@@ -1,14 +1,28 @@
 const API_BASE = '/api';
 
+/** Puerto del backend en desarrollo (debe coincidir con `PORT` del servidor, por defecto 3001). */
+function devApiOrigin(): string {
+  const port = (import.meta.env.VITE_DEV_API_PORT as string | undefined)?.trim() || '3001';
+  return `http://127.0.0.1:${port}`;
+}
+
 /**
- * Si Vite no reenvía /api, define en `.env.local` la URL del **backend** (no la del frontend):
- * VITE_API_ROOT=http://127.0.0.1:3001
+ * En **desarrollo**, las peticiones a `/api` van **directo a 127.0.0.1:3001** (sin pasar por el proxy de Vite).
+ * Así se evitan respuestas HTML erróneas, límites del proxy y confusiones cuando en :3001 corre otro proceso viejo.
+ * `/uploads` sigue siendo relativo y lo atiende el proxy de Vite → mismo backend.
  *
- * Si apuntas por error al mismo origen que Vite (p. ej. :5173), /api devuelve index.html y fallan los DELETE.
+ * En **producción** (build), si el API no comparte origen con el frontend, define:
+ * `VITE_API_ROOT=https://tu-api.example.com`
  */
 function resolveApiUrl(path: string): string {
-  const raw = (import.meta.env.VITE_API_ROOT as string | undefined)?.trim()?.replace(/\/$/, '') || '';
   const p = path.startsWith('/') ? path : `/${path}`;
+  if (import.meta.env.DEV) {
+    if (p.startsWith('/api')) {
+      return `${devApiOrigin()}${p}`;
+    }
+    return p;
+  }
+  const raw = (import.meta.env.VITE_API_ROOT as string | undefined)?.trim()?.replace(/\/$/, '') || '';
   if (!raw) return p;
   try {
     const base = raw.includes('://') ? raw : `http://${raw}`;
@@ -22,11 +36,24 @@ function resolveApiUrl(path: string): string {
     return p;
   }
 }
-const FETCH_TIMEOUT_MS = 15000;
 
-async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+/** Resuelve URL de API (en dev, siempre relativa vía proxy de Vite). */
+function resolveFetchUrl(url: string): string {
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  return resolveApiUrl(url);
+}
+
+const FETCH_TIMEOUT_MS = 15000;
+/** Subidas grandes (p. ej. documento en base64) necesitan más tiempo. */
+const FETCH_TIMEOUT_UPLOAD_MS = 120000;
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = FETCH_TIMEOUT_MS
+): Promise<Response> {
   const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { ...options, signal: ctrl.signal });
     return res;
@@ -41,8 +68,9 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise
 }
 
 function parseJsonOrThrow(res: Response, text: string): unknown {
+  const trimmedForHtml = text.replace(/^\uFEFF/, '').trim();
   const ct = res.headers.get('content-type') || '';
-  const looksHtml = ct.includes('text/html') || text.trim().startsWith('<');
+  const looksHtml = ct.includes('text/html') || trimmedForHtml.startsWith('<');
   if (looksHtml) {
     let detalle = '';
     if (res.status === 404) {
@@ -59,9 +87,9 @@ function parseJsonOrThrow(res: Response, text: string): unknown {
     );
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(trimmedForHtml);
   } catch {
-    throw new Error(`Respuesta inválida del servidor: ${text.slice(0, 100)}`);
+    throw new Error(`Respuesta inválida del servidor: ${trimmedForHtml.slice(0, 100)}`);
   }
 }
 
@@ -98,7 +126,7 @@ export type LoginResponse = {
 };
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
-  const res = await fetchWithTimeout(`${API_BASE}/auth/login`, {
+  const res = await fetchWithTimeout(resolveFetchUrl(`${API_BASE}/auth/login`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -107,8 +135,14 @@ export async function login(email: string, password: string): Promise<LoginRespo
   if (!res.ok) {
     throw new Error(data.error || 'Error al iniciar sesión');
   }
-  if (!data.success || !data.token) {
-    throw new Error('Respuesta inválida del servidor');
+  const tokenOk = typeof data.token === 'string' && data.token.length > 0;
+  const userOk = data.user && typeof data.user === 'object';
+  if (data.success !== true || !tokenOk || !userOk) {
+    const hint = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : '';
+    throw new Error(
+      hint ||
+        'La API no devolvió una sesión válida (token o usuario). Con el front en :5173, ejecuta «npm run dev» en la raíz del proyecto (debe levantar la API en :3001 y Vite en :5173). Si solo abriste «vite», arranca también el backend: «npm run dev:server».'
+    );
   }
   return data;
 }
@@ -116,7 +150,7 @@ export async function login(email: string, password: string): Promise<LoginRespo
 export async function getMe(): Promise<User | null> {
   const token = getToken();
   if (!token) return null;
-  const res = await fetchWithTimeout(`${API_BASE}/auth/me`, {
+  const res = await fetchWithTimeout(resolveFetchUrl(`${API_BASE}/auth/me`), {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return null;
@@ -188,16 +222,19 @@ export function getStoredUser(): User | null {
   }
 }
 
-function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+function fetchWithAuth(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = FETCH_TIMEOUT_MS
+): Promise<Response> {
   const token = getToken();
-  const finalUrl =
-    url.startsWith('http://') || url.startsWith('https://') ? url : resolveApiUrl(url);
+  const finalUrl = resolveFetchUrl(url);
   const headers = new Headers(options.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
   if (!headers.has('Content-Type') && options.body && typeof options.body === 'string') {
     headers.set('Content-Type', 'application/json');
   }
-  return fetchWithTimeout(finalUrl, { ...options, headers });
+  return fetchWithTimeout(finalUrl, { ...options, headers }, timeoutMs);
 }
 
 /** Geocodificación vía API: Nominatim exige User-Agent identificable (no usable en fetch directo desde el navegador). */
@@ -292,6 +329,8 @@ export type ProveedorResumen = {
   totalFacturado: number;
   totalPagado: number;
   saldoPendiente: number;
+  /** Suma de costos de mantenimientos vinculados a este proveedor */
+  totalMantenimiento: number;
 };
 
 export type ProveedorFacturaPagoRow = {
@@ -325,9 +364,25 @@ export type ProveedorFacturaRow = {
   pagos: ProveedorFacturaPagoRow[];
 };
 
+export type ProveedorMantenimientoVinculo = {
+  id: string;
+  unidadId: string;
+  placas: string;
+  marca: string;
+  modelo: string;
+  tipo: string;
+  descripcion: string;
+  costo: number;
+  fechaInicio: string;
+  fechaFin: string | null;
+  estado: string;
+  creadoEn: string;
+};
+
 export type ProveedorDetalle = ProveedorResumen & {
   facturas: ProveedorFacturaRow[];
   resumenFacturas: { pagadas: number; parciales: number; pendientes: number };
+  mantenimientos: ProveedorMantenimientoVinculo[];
 };
 
 export type FacturaPendienteReporte = {
@@ -365,6 +420,16 @@ export async function getProveedores(): Promise<ProveedorResumen[]> {
   const res = await fetchWithAuth(`${API_BASE}/proveedores`);
   const data = await parseResponse<{ proveedores?: ProveedorResumen[]; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al cargar proveedores');
+  return data.proveedores ?? [];
+}
+
+/** Listado mínimo de proveedores activos (p. ej. selector en mantenimiento). */
+export type ProveedorCatalogoRow = { id: string; nombreRazonSocial: string };
+
+export async function getProveedoresCatalogo(): Promise<ProveedorCatalogoRow[]> {
+  const res = await fetchWithAuth(`${API_BASE}/proveedores/catalogo`);
+  const data = await parseResponse<{ proveedores?: ProveedorCatalogoRow[]; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al cargar catálogo de proveedores');
   return data.proveedores ?? [];
 }
 
@@ -441,7 +506,7 @@ export async function createProveedorFactura(
   if (fields.archivo) form.append('archivo', fields.archivo);
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetchWithTimeout(`${API_BASE}/proveedores/${proveedorId}/facturas`, {
+  const res = await fetchWithTimeout(resolveFetchUrl(`${API_BASE}/proveedores/${proveedorId}/facturas`), {
     method: 'POST',
     headers,
     body: form,
@@ -495,7 +560,7 @@ export async function getReporteProveedoresPorUnidadApi(): Promise<ReportePorUni
 }
 
 /* ─── Unidades ─── */
-export type UnidadDoc = { id: string; nombre: string; tipo: string; fechaSubida: string };
+export type UnidadDoc = { id: string; nombre: string; tipo: string; ruta?: string; fechaSubida: string };
 export type UnidadAct = { id: string; accion: string; detalle: string; fecha: string; icon: string };
 export type UnidadImg = { id: string; nombreArchivo: string; ruta: string; descripcion: string; fechaSubida: string };
 
@@ -504,7 +569,11 @@ export type UnidadRow = {
   placas: string;
   marca: string;
   modelo: string;
-  estatus: 'Disponible' | 'En Renta' | 'Taller';
+  estatus: 'Disponible' | 'En Renta';
+  numeroSerieCaja?: string;
+  subestatusDisponible?: 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
+  ubicacionDisponible?: 'lote' | 'patio';
+  clienteEnRenta?: string;
   kilometraje: number;
   combustiblePct: number;
   observaciones: string;
@@ -535,6 +604,9 @@ export async function createUnidad(p: {
   marca: string;
   modelo: string;
   estatus?: string;
+  numeroSerieCaja?: string;
+  subestatusDisponible?: 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
+  ubicacionDisponible?: 'lote' | 'patio';
   kilometraje?: number;
   combustiblePct?: number;
   observaciones?: string;
@@ -557,6 +629,9 @@ export async function updateUnidad(
     marca: string;
     modelo: string;
     estatus: string;
+    numeroSerieCaja: string;
+    subestatusDisponible: 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
+    ubicacionDisponible: 'lote' | 'patio';
     kilometraje: number;
     combustiblePct: number;
     observaciones: string;
@@ -585,13 +660,45 @@ export async function setEstatusUnidad(id: string, estatus: string): Promise<Uni
   return data.unidad!;
 }
 
-export async function addDocumentoUnidad(id: string, tipo: string, nombre: string): Promise<UnidadRow> {
-  const res = await fetchWithAuth(`${API_BASE}/unidades/${id}/documentos`, {
-    method: 'POST',
-    body: JSON.stringify({ tipo, nombre }),
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = r.result as string;
+      const comma = s.indexOf(',');
+      resolve(comma >= 0 ? s.slice(comma + 1) : s);
+    };
+    r.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    r.readAsDataURL(file);
   });
+}
+
+export async function uploadDocumentoUnidad(id: string, tipo: string, file: File): Promise<UnidadRow> {
+  const archivoBase64 = await fileToBase64(file);
+  const nombreArchivo = (file.name && file.name.trim()) || 'documento';
+  const res = await fetchWithAuth(
+    `${API_BASE}/unidades/${id}/documentos`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        tipo,
+        nombreArchivo,
+        archivoBase64,
+      }),
+    },
+    FETCH_TIMEOUT_UPLOAD_MS
+  );
   const data = await parseResponse<{ unidad?: UnidadRow; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al agregar documento');
+  return data.unidad!;
+}
+
+export async function deleteDocumentoUnidad(unidadId: string, docId: string): Promise<UnidadRow> {
+  const res = await fetchWithAuth(`${API_BASE}/unidades/${unidadId}/documentos/${docId}`, {
+    method: 'DELETE',
+  });
+  const data = await parseResponse<{ unidad?: UnidadRow; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al eliminar documento');
   return data.unidad!;
 }
 
@@ -617,6 +724,10 @@ export async function deleteUnidad(id: string): Promise<void> {
 }
 
 export function getImagenUrl(ruta: string): string {
+  return `/uploads/${ruta}`;
+}
+
+export function getDocumentoUrl(ruta: string): string {
   return `/uploads/${ruta}`;
 }
 
@@ -700,6 +811,8 @@ export type RentaRow = {
   marca: string;
   modelo: string;
   tipoUnidad?: 'remolque_seco' | 'refrigerado' | 'maquinaria';
+  /** Expediente de cliente en catálogo, si la renta está vinculada */
+  clienteId?: string;
   clienteNombre: string;
   clienteTelefono: string;
   clienteEmail: string;
@@ -737,7 +850,7 @@ export type RentaCalendario = {
 };
 
 export type ActividadItem = {
-  tipo: 'unidad' | 'renta' | 'usuario' | 'mantenimiento' | 'auth' | 'sistema' | 'proveedor';
+  tipo: 'unidad' | 'renta' | 'usuario' | 'mantenimiento' | 'auth' | 'sistema' | 'proveedor' | 'cliente';
   id: string;
   accion: string;
   detalle: string;
@@ -748,6 +861,7 @@ export type ActividadItem = {
   rentaId?: string;
   unidadId?: string;
   mantenimientoId?: string;
+  clienteId?: string;
   usuarioNombre?: string;
 };
 
@@ -797,8 +911,145 @@ export async function getRenta(id: string): Promise<RentaRow> {
   return data.renta!;
 }
 
+export type ClienteListRow = {
+  id: string;
+  tipo: 'persona_fisica' | 'persona_moral';
+  nombreComercial: string;
+  razonSocial: string;
+  rfc: string;
+  curp: string;
+  representanteLegal: string;
+  telefono: string;
+  email: string;
+  direccion: string;
+  notas: string;
+  creadoEn?: string;
+  actualizadoEn?: string;
+  docCount?: number;
+  rentasVinculadas?: number;
+};
+
+export type ClienteDocumento = {
+  id: string;
+  tipo: string;
+  nombre: string;
+  ruta: string;
+  creadoEn: string;
+};
+
+export type ClienteRentaVinculo = {
+  id: string;
+  fechaInicio: string;
+  fechaFin: string;
+  estado: string;
+  placas: string;
+};
+
+export type ClienteDetalle = ClienteListRow & {
+  documentos: ClienteDocumento[];
+  rentas: ClienteRentaVinculo[];
+};
+
+export async function getClientes(): Promise<ClienteListRow[]> {
+  const res = await fetchWithAuth(`${API_BASE}/clientes`);
+  const data = await parseResponse<{ clientes?: ClienteListRow[]; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al cargar clientes');
+  return data.clientes ?? [];
+}
+
+export async function getCliente(id: string): Promise<ClienteDetalle> {
+  const res = await fetchWithAuth(`${API_BASE}/clientes/${id}`);
+  const data = await parseResponse<{ cliente?: ClienteDetalle; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al cargar cliente');
+  return data.cliente!;
+}
+
+export async function createCliente(p: {
+  tipo?: 'persona_fisica' | 'persona_moral';
+  nombreComercial: string;
+  razonSocial?: string;
+  rfc?: string;
+  curp?: string;
+  representanteLegal?: string;
+  telefono?: string;
+  email?: string;
+  direccion?: string;
+  notas?: string;
+}): Promise<ClienteDetalle> {
+  const res = await fetchWithAuth(`${API_BASE}/clientes`, {
+    method: 'POST',
+    body: JSON.stringify(p),
+  });
+  const data = await parseResponse<{ cliente?: ClienteDetalle; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al crear cliente');
+  return data.cliente!;
+}
+
+export async function updateCliente(
+  id: string,
+  p: Partial<{
+    tipo: 'persona_fisica' | 'persona_moral';
+    nombreComercial: string;
+    razonSocial: string;
+    rfc: string;
+    curp: string;
+    representanteLegal: string;
+    telefono: string;
+    email: string;
+    direccion: string;
+    notas: string;
+  }>
+): Promise<ClienteDetalle> {
+  const res = await fetchWithAuth(`${API_BASE}/clientes/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(p),
+  });
+  const data = await parseResponse<{ cliente?: ClienteDetalle; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al actualizar cliente');
+  return data.cliente!;
+}
+
+export async function deleteCliente(id: string): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/clientes/${id}`, { method: 'DELETE' });
+  const data = await parseResponse<{ error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al desactivar cliente');
+}
+
+export async function uploadDocumentoCliente(
+  clienteId: string,
+  file: File,
+  tipo: string,
+  nombre?: string
+): Promise<ClienteDetalle> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('documento', file);
+  form.append('tipo', tipo);
+  if (nombre) form.append('nombre', nombre);
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/clientes/${clienteId}/documentos`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  const data = await parseResponse<{ cliente?: ClienteDetalle; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al subir documento');
+  return data.cliente!;
+}
+
+export async function deleteDocumentoCliente(clienteId: string, docId: string): Promise<ClienteDetalle> {
+  const res = await fetchWithAuth(`${API_BASE}/clientes/${clienteId}/documentos/${docId}`, {
+    method: 'DELETE',
+  });
+  const data = await parseResponse<{ cliente?: ClienteDetalle; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al eliminar documento');
+  return data.cliente!;
+}
+
 export async function createRenta(p: {
   unidadId: string;
+  clienteId?: string | null;
   clienteNombre: string;
   clienteTelefono?: string;
   clienteEmail?: string;
@@ -820,6 +1071,7 @@ export async function createRenta(p: {
     method: 'POST',
     body: JSON.stringify({
       unidadId: p.unidadId,
+      clienteId: p.clienteId ?? undefined,
       clienteNombre: p.clienteNombre,
       clienteTelefono: p.clienteTelefono ?? '',
       clienteEmail: p.clienteEmail ?? '',
@@ -847,6 +1099,7 @@ export async function updateRenta(
   id: string,
   p: Partial<{
     unidadId: string;
+    clienteId: string | null;
     clienteNombre: string;
     clienteTelefono: string;
     clienteEmail: string;
@@ -917,6 +1170,8 @@ export type MantenimientoRow = {
   placas?: string;
   marca?: string;
   modelo?: string;
+  proveedorId?: string;
+  proveedorNombre?: string;
   tipo: string;
   descripcion: string;
   costo: number;
@@ -942,6 +1197,7 @@ export async function getMantenimientosUnidad(unidadId: string): Promise<Manteni
 
 export async function createMantenimiento(p: {
   unidadId: string;
+  proveedorId?: string;
   tipo?: string;
   descripcion?: string;
   costo?: number;
@@ -958,7 +1214,18 @@ export async function createMantenimiento(p: {
   return data.mantenimiento!;
 }
 
-export async function updateMantenimiento(id: string, p: Partial<{ tipo: string; descripcion: string; costo: number; fechaInicio: string; fechaFin: string | null; estado: string }>): Promise<MantenimientoRow> {
+export async function updateMantenimiento(
+  id: string,
+  p: Partial<{
+    tipo: string;
+    descripcion: string;
+    costo: number;
+    fechaInicio: string;
+    fechaFin: string | null;
+    estado: string;
+    proveedorId: string | null;
+  }>
+): Promise<MantenimientoRow> {
   const res = await fetchWithAuth(`${API_BASE}/mantenimiento/${id}`, {
     method: 'PUT',
     body: JSON.stringify(p),
@@ -970,6 +1237,16 @@ export async function updateMantenimiento(id: string, p: Partial<{ tipo: string;
 
 /* ─── Check-in / Check-out ─── */
 export type ChecklistItemPayload = { id: string; label: string; presente: boolean };
+
+export type CheckinOutModalidad = 'caja_seca' | 'refrigerado' | 'mulita_patio';
+
+export type CheckinOutImagen = {
+  id: string;
+  nombreArchivo: string;
+  ruta: string;
+  descripcion: string;
+  creadoEn: string;
+};
 
 export type CheckinOutRegistro = {
   id: string;
@@ -988,6 +1265,9 @@ export type CheckinOutRegistro = {
   combustiblePct: number | null;
   checklist: ChecklistItemPayload[];
   observaciones: string;
+  modalidad: CheckinOutModalidad;
+  inspeccion: Record<string, unknown>;
+  imagenes: CheckinOutImagen[];
   creadoEn: string;
 };
 
@@ -1008,6 +1288,8 @@ export async function createCheckinOutRegistro(p: {
   combustiblePct?: number | string;
   checklist: ChecklistItemPayload[];
   observaciones?: string;
+  modalidad?: CheckinOutModalidad;
+  inspeccion?: Record<string, unknown>;
 }): Promise<CheckinOutRegistro> {
   const res = await fetchWithAuth(`${API_BASE}/checkin-out`, {
     method: 'POST',
@@ -1030,6 +1312,8 @@ export async function updateCheckinOutRegistro(
     combustiblePct?: number | string;
     checklist: ChecklistItemPayload[];
     observaciones?: string;
+    modalidad?: CheckinOutModalidad;
+    inspeccion?: Record<string, unknown>;
   }
 ): Promise<CheckinOutRegistro> {
   const res = await fetchWithAuth(`${API_BASE}/checkin-out/${id}`, {
@@ -1046,6 +1330,33 @@ export async function deleteCheckinOutRegistro(id: string): Promise<void> {
   if (res.ok) return;
   const data = await parseResponse<{ error?: string }>(res);
   throw new Error(data.error || 'Error al eliminar');
+}
+
+export async function uploadCheckinOutImagen(
+  registroId: string,
+  file: File,
+  descripcion?: string
+): Promise<CheckinOutRegistro> {
+  const fd = new FormData();
+  fd.append('imagen', file);
+  if (descripcion?.trim()) fd.append('descripcion', descripcion.trim());
+  const res = await fetchWithAuth(
+    `${API_BASE}/checkin-out/${registroId}/imagenes`,
+    { method: 'POST', body: fd },
+    FETCH_TIMEOUT_UPLOAD_MS
+  );
+  const data = await parseResponse<{ registro?: CheckinOutRegistro; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al subir evidencia');
+  return data.registro!;
+}
+
+export async function deleteCheckinOutImagen(registroId: string, imagenId: string): Promise<CheckinOutRegistro> {
+  const res = await fetchWithAuth(`${API_BASE}/checkin-out/${registroId}/imagenes/${imagenId}`, {
+    method: 'DELETE',
+  });
+  const data = await parseResponse<{ registro?: CheckinOutRegistro; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al eliminar imagen');
+  return data.registro!;
 }
 
 export type SoporteChatMessage = { role: 'user' | 'assistant'; content: string };

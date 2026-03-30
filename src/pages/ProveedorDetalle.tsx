@@ -20,6 +20,20 @@ function fmtMoney(n: number) {
   return `$${(n ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function fmtFechaCorta(s: string) {
+  if (!s) return '—';
+  const d = new Date(s.includes('T') ? s : `${s}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+const ESTADO_MANT_LABEL: Record<string, string> = {
+  programado: 'Programado',
+  en_proceso: 'En proceso',
+  completado: 'Completado',
+  pospuesto: 'Pospuesto',
+};
+
 const METODOS: { v: string; l: string }[] = [
   { v: 'efectivo', l: 'Efectivo' },
   { v: 'transferencia', l: 'Transferencia' },
@@ -301,7 +315,7 @@ export function ProveedorDetalle() {
             <h2 className="text-xl font-semibold text-gray-900">{prov.nombreRazonSocial}</h2>
             <p className="mt-0.5 text-sm text-gray-500">RFC: {prov.rfc || '—'}</p>
           </div>
-          <div className="grid grid-cols-3 gap-3 sm:flex sm:flex-wrap">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-lg border border-skyline-border bg-skyline-bg px-4 py-2 text-center sm:text-left">
               <p className="text-xs font-medium text-gray-500">Facturado</p>
               <p className="text-lg font-semibold tabular-nums text-gray-900">{fmtMoney(prov.totalFacturado)}</p>
@@ -311,7 +325,7 @@ export function ProveedorDetalle() {
               <p className="text-lg font-semibold tabular-nums text-emerald-700">{fmtMoney(prov.totalPagado)}</p>
             </div>
             <div className="rounded-lg border border-skyline-border bg-skyline-bg px-4 py-2 text-center sm:text-left">
-              <p className="text-xs font-medium text-gray-500">Saldo</p>
+              <p className="text-xs font-medium text-gray-500">Saldo facturas</p>
               <p
                 className={`text-lg font-semibold tabular-nums ${
                   prov.saldoPendiente > 0.01 ? 'text-amber-600' : 'text-emerald-600'
@@ -320,7 +334,22 @@ export function ProveedorDetalle() {
                 {fmtMoney(prov.saldoPendiente)}
               </p>
             </div>
+            <div
+              className="rounded-lg border border-violet-200 bg-violet-50/80 px-4 py-2 text-center sm:text-left"
+              title="Suma de costos registrados en Mantenimiento con este proveedor"
+            >
+              <p className="text-xs font-medium text-violet-800">Mantenimiento</p>
+              <p className="text-lg font-semibold tabular-nums text-violet-900">
+                {fmtMoney(prov.totalMantenimiento ?? 0)}
+              </p>
+            </div>
           </div>
+          <p className="mt-2 text-xs text-gray-500">
+            Total conceptos (facturas + mantenimiento):{' '}
+            <span className="font-semibold tabular-nums text-gray-800">
+              {fmtMoney((prov.totalFacturado || 0) + (prov.totalMantenimiento || 0))}
+            </span>
+          </p>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-medium text-gray-600">
           <span className="rounded-full bg-white px-2 py-1 ring-1 ring-skyline-border">
@@ -487,6 +516,58 @@ export function ProveedorDetalle() {
           </button>
         </form>
       </div>
+
+      <section className="mb-6 rounded-xl border border-violet-200/90 bg-gradient-to-br from-violet-50/50 to-white p-5 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-gray-900">Registros de mantenimiento con este proveedor</h3>
+          <Link to="/mantenimiento" className="text-xs font-medium text-skyline-blue hover:underline">
+            Abrir módulo Mantenimiento
+          </Link>
+        </div>
+        {(prov.mantenimientos ?? []).length === 0 ? (
+          <p className="text-sm text-gray-500">
+            Aún no hay servicios vinculados. En <strong>Mantenimiento</strong>, al registrar o editar un servicio, elige
+            este proveedor en el desplegable para que el costo aparezca aquí y en el listado de proveedores.
+          </p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-skyline-border bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-skyline-border bg-skyline-bg text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
+                  <th className="px-3 py-2">Unidad</th>
+                  <th className="px-3 py-2">Tipo</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Fechas</th>
+                  <th className="px-3 py-2 text-right">Costo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(prov.mantenimientos ?? []).map((row) => (
+                  <tr key={row.id} className="border-b border-skyline-border/80 last:border-0">
+                    <td className="px-3 py-2 font-medium text-gray-900">
+                      {row.placas || row.unidadId}
+                      <span className="block text-xs font-normal text-gray-500">
+                        {row.marca} {row.modelo}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 capitalize text-gray-700">{row.tipo}</td>
+                    <td className="px-3 py-2 text-gray-700">
+                      {ESTADO_MANT_LABEL[row.estado] ?? row.estado}
+                    </td>
+                    <td className="px-3 py-2 text-gray-600">
+                      {fmtFechaCorta(row.fechaInicio)}
+                      {row.fechaFin ? ` → ${fmtFechaCorta(row.fechaFin)}` : ''}
+                    </td>
+                    <td className="px-3 py-2 text-right font-medium tabular-nums text-gray-900">
+                      {fmtMoney(row.costo)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="rounded-xl border border-skyline-border bg-white p-5 shadow-sm">
         <h3 className="mb-4 text-sm font-semibold text-gray-900">Facturas y pagos</h3>

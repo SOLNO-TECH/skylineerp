@@ -1,5 +1,11 @@
 import { Icon } from '@iconify/react';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useAuth } from '../context/AuthContext';
+import {
+  getRentasProximosVencimientos,
+  getMantenimientos,
+  getUnidades,
+} from '../api/client';
 
 type Notif = {
   id: string;
@@ -10,49 +16,166 @@ type Notif = {
   tipo: 'mantenimiento' | 'renta' | 'general';
 };
 
-const mockNotifs: Notif[] = [
-  {
-    id: '1',
-    titulo: 'Mantenimiento próximo',
-    mensaje: 'GHI-90-12: cambio de aceite vence en 4 días.',
-    fecha: new Date().toISOString(),
-    leida: false,
-    tipo: 'mantenimiento',
-  },
-  {
-    id: '2',
-    titulo: 'Renta por finalizar',
-    mensaje: 'ABC-12-34 — Check-out programado hoy 10:00.',
-    fecha: new Date(Date.now() - 3600000).toISOString(),
-    leida: false,
-    tipo: 'renta',
-  },
-  {
-    id: '3',
-    titulo: 'Seguro por vencer',
-    mensaje: 'DEF-56-78: seguro vence el 25 Mar.',
-    fecha: new Date(Date.now() - 86400000).toISOString(),
-    leida: true,
-    tipo: 'general',
-  },
-];
+const LEIDAS_KEY = 'skyline-notifs-leidas';
+const COMBUSTIBLE_UMBRAL_PCT = 20;
+const MANTO_VENTANA_DIAS = 30;
 
+function loadLeidasFromStorage(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LEIDAS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    return new Set(Array.isArray(arr) ? arr.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveLeidasToStorage(ids: Set<string>) {
+  try {
+    localStorage.setItem(LEIDAS_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function startOfDayMs(isoDate: string): number {
+  const s = isoDate.slice(0, 10);
+  return new Date(`${s}T12:00:00`).setHours(0, 0, 0, 0);
+}
+
+function formatDateShort(isoDate: string): string {
+  const s = isoDate.slice(0, 10);
+  return new Date(`${s}T12:00:00`).toLocaleDateString('es-MX', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+function truncate(s: string, max: number): string {
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1)}…`;
+}
+
+/** Etiqueta relativa: fechas futuras y pasadas. */
 function formatFecha(iso: string) {
   const d = new Date(iso);
   const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  if (diff < 60000) return 'Ahora';
-  if (diff < 3600000) return `Hace ${Math.floor(diff / 60000)} min`;
-  if (diff < 86400000) return `Hace ${Math.floor(diff / 3600000)} h`;
+  const diffMs = d.getTime() - now.getTime();
+  const abs = Math.abs(diffMs);
+  const past = diffMs < 0;
+
+  if (!past) {
+    if (abs < 60_000) return 'En breve';
+    if (abs < 3_600_000) return `En ${Math.max(1, Math.ceil(abs / 60_000))} min`;
+    if (abs < 86_400_000) return `En ${Math.max(1, Math.ceil(abs / 3_600_000))} h`;
+    const days = Math.ceil(abs / 86_400_000);
+    if (days === 1) return 'Mañana';
+    return `En ${days} días`;
+  }
+
+  if (abs < 60_000) return 'Ahora';
+  if (abs < 3_600_000) return `Hace ${Math.floor(abs / 60_000)} min`;
+  if (abs < 86_400_000) return `Hace ${Math.floor(abs / 3_600_000)} h`;
   return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' });
 }
 
+async function buildNotificacionesDesdeApi(): Promise<Omit<Notif, 'leida'>[]> {
+  const [rentas, mantos, unidades] = await Promise.all([
+    getRentasProximosVencimientos(21),
+    getMantenimientos(),
+    getUnidades(),
+  ]);
+
+  const items: Omit<Notif, 'leida'>[] = [];
+
+  for (const r of rentas) {
+    const cliente = (r.clienteNombre || '').trim() || 'Cliente';
+    items.push({
+      id: `renta-vence-${r.id}`,
+      titulo: 'Renta por finalizar',
+      mensaje: `${r.placas} — fin ${formatDateShort(r.fechaFin)} · ${cliente}`,
+      fecha: `${r.fechaFin.slice(0, 10)}T18:00:00`,
+      tipo: 'renta',
+    });
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const limitEnd = new Date(today);
+  limitEnd.setDate(limitEnd.getDate() + MANTO_VENTANA_DIAS);
+  const staleBefore = new Date(today);
+  staleBefore.setDate(staleBefore.getDate() - 45);
+
+  for (const m of mantos) {
+    if (m.estado !== 'programado' && m.estado !== 'en_proceso') continue;
+    const startMs = startOfDayMs(m.fechaInicio);
+    if (startMs > limitEnd.getTime()) continue;
+    if (startMs < staleBefore.getTime()) continue;
+
+    const placas = (m.placas || '').trim() || 'Unidad';
+    const estadoLabel = m.estado === 'en_proceso' ? 'En proceso' : 'Programado';
+    items.push({
+      id: `mantenimiento-${m.id}`,
+      titulo: 'Mantenimiento',
+      mensaje: `${placas}: ${m.tipo} — ${estadoLabel.toLowerCase()} · ${truncate(m.descripcion, 42)}`,
+      fecha: `${m.fechaInicio.slice(0, 10)}T09:00:00`,
+      tipo: 'mantenimiento',
+    });
+  }
+
+  for (const u of unidades) {
+    if (u.estatus !== 'En Renta') continue;
+    if (u.combustiblePct >= COMBUSTIBLE_UMBRAL_PCT) continue;
+    items.push({
+      id: `combustible-${u.id}`,
+      titulo: 'Combustible bajo',
+      mensaje: `${u.placas}: ${u.combustiblePct}% · unidad en renta`,
+      fecha: new Date().toISOString(),
+      tipo: 'general',
+    });
+  }
+
+  items.sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+
+  return items.slice(0, 25);
+}
+
 export function Notifications() {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  const [notifs, setNotifs] = useState<Notif[]>(mockNotifs);
+  const [raw, setRaw] = useState<Omit<Notif, 'leida'>[]>([]);
+  const [leidas, setLeidas] = useState<Set<string>>(loadLeidasFromStorage);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  const sinLeer = notifs.filter((n) => !n.leida).length;
+  const refresh = useCallback(async () => {
+    if (!user) {
+      setRaw([]);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await buildNotificacionesDesdeApi();
+      setRaw(list);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudieron cargar las notificaciones');
+      setRaw([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (open) refresh();
+  }, [open, refresh]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -64,8 +187,20 @@ export function Notifications() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open]);
 
+  const notifs: Notif[] = useMemo(
+    () => raw.map((n) => ({ ...n, leida: leidas.has(n.id) })),
+    [raw, leidas],
+  );
+
+  const sinLeer = notifs.filter((n) => !n.leida).length;
+
   function marcarLeida(id: string) {
-    setNotifs((prev) => prev.map((n) => (n.id === id ? { ...n, leida: true } : n)));
+    setLeidas((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      saveLeidasToStorage(next);
+      return next;
+    });
   }
 
   return (
@@ -89,13 +224,24 @@ export function Notifications() {
           <div className="border-b border-skyline-border bg-skyline-bg px-4 py-3">
             <h3 className="text-sm font-semibold text-gray-900">Notificaciones</h3>
             <p className="text-xs text-gray-500">
-              {sinLeer > 0 ? `${sinLeer} sin leer` : 'Todo al día'}
+              {loading
+                ? 'Actualizando…'
+                : sinLeer > 0
+                  ? `${sinLeer} sin leer`
+                  : notifs.length > 0
+                    ? 'Todo al día'
+                    : 'Sin alertas recientes'}
             </p>
           </div>
+          {error && (
+            <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">{error}</p>
+          )}
           <ul className="max-h-80 overflow-y-auto">
-            {notifs.length === 0 ? (
+            {loading && notifs.length === 0 ? (
+              <li className="px-4 py-8 text-center text-sm text-gray-500">Cargando…</li>
+            ) : notifs.length === 0 ? (
               <li className="px-4 py-8 text-center text-sm text-gray-500">
-                No hay notificaciones.
+                No hay rentas por vencer, mantenimientos programados ni alertas de combustible en este momento.
               </li>
             ) : (
               notifs.map((n) => (
@@ -122,7 +268,7 @@ export function Notifications() {
                             ? 'mdi:wrench'
                             : n.tipo === 'renta'
                               ? 'mdi:key-chain'
-                              : 'mdi:information'
+                              : 'mdi:fuel'
                         }
                         className="size-4"
                         aria-hidden

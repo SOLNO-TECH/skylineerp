@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { useNotification } from '../context/NotificationContext';
 
 const iconByType = {
-  success: 'mdi:check-circle',
+  success: 'mdi:check-bold',
   error: 'mdi:alert-circle',
   warning: 'mdi:alert',
   info: 'mdi:information',

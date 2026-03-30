@@ -7,10 +7,11 @@ import { dirname, join } from 'path';
 import fs, { existsSync } from 'fs';
 import {
   initDb,
+  db,
+  createUsuario,
   getAllUsuarios,
   getUsuarioByIdAdmin,
   getUsuarioPerfil,
-  createUsuario,
   updateUsuario,
   eliminarUsuarioDefinitivo,
   existeUsuarioPorEmail,
@@ -20,6 +21,7 @@ import {
   updateUnidadDb,
   setEstatusUnidad,
   addUnidadDocumento,
+  deleteUnidadDocumento,
   addUnidadActividad,
   addUnidadImagen,
   deleteUnidadImagen,
@@ -45,6 +47,7 @@ import {
   updateCheckinOutRegistro,
   deleteCheckinOutRegistro,
   getAllProveedores,
+  getProveedoresCatalogo,
   getProveedorById,
   createProveedor,
   updateProveedor,
@@ -54,6 +57,16 @@ import {
   addPagoProveedorFactura,
   getReporteCuentasPorPagar,
   getReporteProveedoresPorUnidad,
+  addCheckinOutImagen,
+  deleteCheckinOutImagen,
+  getCheckinOutRegistroById,
+  getAllClientes,
+  getClienteById,
+  createCliente,
+  updateCliente,
+  deleteClienteSoft,
+  addClienteDocumento,
+  deleteClienteDocumento,
 } from './db.js';
 import { login, requireAuth, requireRole, ROLES } from './auth.js';
 import { getSoporteReply } from './soporteChat.js';
@@ -61,12 +74,89 @@ import { generarBufferExportCrudXlsx } from './exportCatalogoCrud.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UPLOADS_DIR = join(__dirname, 'uploads', 'unidades');
+const DOCS_DIR = join(__dirname, 'uploads', 'documentos');
 const AVATAR_DIR = join(__dirname, 'uploads', 'avatares');
+const CHECKIN_FOTOS_DIR = join(__dirname, 'uploads', 'checkin-out');
+const CLIENTE_DOCS_DIR = join(__dirname, 'uploads', 'clientes');
 
 initDb();
 
+/** Si la BD no tiene usuarios (deploy nuevo), opción de crear admin@skyline.com vía env. */
+function bootstrapAdminIfNoUsers() {
+  const n = db.prepare('SELECT COUNT(*) as c FROM usuarios').get().c;
+  if (n > 0) return;
+  const pwd = process.env.SKYLINE_INITIAL_ADMIN_PASSWORD?.trim();
+  if (!pwd || pwd.length < 8) {
+    console.warn(
+      '[Skyline ERP] La base de datos no tiene usuarios. ' +
+        'En el contenedor ejecute: cd /app/server && node seed.js ' +
+        'o defina SKYLINE_INITIAL_ADMIN_PASSWORD (mín. 8 caracteres) y reinicie para crear admin@skyline.com.'
+    );
+    return;
+  }
+  try {
+    const hash = bcrypt.hashSync(pwd, 10);
+    createUsuario('admin@skyline.com', hash, 'Administrador', ROLES.ADMIN, null);
+    console.warn('[Skyline ERP] Usuario inicial creado: admin@skyline.com');
+  } catch (e) {
+    console.error('[Skyline ERP] No se pudo crear el administrador inicial:', e?.message || e);
+  }
+}
+
+bootstrapAdminIfNoUsers();
+
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(DOCS_DIR, { recursive: true });
 fs.mkdirSync(AVATAR_DIR, { recursive: true });
+fs.mkdirSync(CHECKIN_FOTOS_DIR, { recursive: true });
+fs.mkdirSync(CLIENTE_DOCS_DIR, { recursive: true });
+
+/** Serie de caja: acepta camelCase, snake_case o alias por si el cliente/proxy transforma el JSON. */
+function pickNumeroSerieCaja(body) {
+  if (!body || typeof body !== 'object') return undefined;
+  if (
+    !('numeroSerieCaja' in body) &&
+    !('numero_serie_caja' in body) &&
+    !('numeroSerie' in body) &&
+    !('serie' in body) &&
+    !('numero_serie' in body)
+  ) {
+    return undefined;
+  }
+  const v =
+    body.numeroSerieCaja ??
+    body.numero_serie_caja ??
+    body.numeroSerie ??
+    body.serie ??
+    body.numero_serie;
+  return String(v ?? '').trim();
+}
+
+/** Evita multipart/proxy: el cliente envía base64 + nombreArchivo. */
+function saveUnidadDocumentoFromBase64(unidadId, nombreArchivo, archivoBase64) {
+  const b64 = String(archivoBase64)
+    .replace(/^data:[^;]+;base64,/i, '')
+    .replace(/\s/g, '')
+    .trim();
+  if (!b64) throw new Error('Archivo vacío');
+  let buf;
+  try {
+    buf = Buffer.from(b64, 'base64');
+  } catch {
+    throw new Error('Contenido del archivo inválido (base64)');
+  }
+  if (!buf.length) throw new Error('Archivo vacío');
+  if (buf.length > 20 * 1024 * 1024) throw new Error('El archivo supera el máximo de 20 MB');
+  const dir = join(DOCS_DIR, String(unidadId));
+  fs.mkdirSync(dir, { recursive: true });
+  const safeName = String(nombreArchivo || 'documento').replace(/[\\/]/g, '_');
+  const extMatch = safeName.match(/\.\w+$/);
+  const ext = extMatch ? extMatch[0] : '.bin';
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
+  const fullPath = join(dir, filename);
+  fs.writeFileSync(fullPath, buf);
+  return { nombre: safeName, ruta: `documentos/${unidadId}/${filename}` };
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -106,28 +196,53 @@ const uploadAvatar = multer({
   },
 });
 
+const checkinFotoStorage = multer.diskStorage({
+  destination: (req, _file, cb) => {
+    const dir = join(CHECKIN_FOTOS_DIR, String(req.params.id));
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = (file.originalname.match(/\.\w+$/) || ['.jpg'])[0];
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`);
+  },
+});
+const uploadCheckinFoto = multer({
+  storage: checkinFotoStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const ok = /^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype);
+    cb(null, ok);
+  },
+});
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '40mb' }));
 app.use('/uploads', express.static(join(__dirname, 'uploads')));
 
 app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email y contraseña requeridos' });
-  }
-  const result = login(email, password);
-  if (!result.success) {
-    return res.status(401).json({ error: result.error });
-  }
   try {
-    registrarLoginUsuario(result.user.id, result.user.nombre, result.user.email);
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email y contraseña requeridos' });
+    }
+    const result = login(email, password);
+    if (!result.success) {
+      return res.status(401).json({ error: result.error });
+    }
+    try {
+      registrarLoginUsuario(result.user.id, result.user.nombre, result.user.email);
+    } catch (e) {
+      console.error('registrarLoginUsuario:', e);
+    }
+    return res.json(result);
   } catch (e) {
-    console.error('registrarLoginUsuario:', e);
+    console.error('POST /api/auth/login:', e);
+    return res.status(500).json({ error: 'Error interno al iniciar sesión' });
   }
-  res.json(result);
 });
 
 app.get('/api/auth/me', requireAuth, (req, res) => {
@@ -361,18 +476,52 @@ app.get('/api/unidades/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/unidades', requireAuth, (req, res) => {
-  const { placas, marca, modelo, estatus, kilometraje, combustiblePct, observaciones } = req.body || {};
+  const body = req.body || {};
+  const {
+    placas, marca, modelo, estatus, subestatusDisponible, ubicacionDisponible,
+    kilometraje, combustiblePct, observaciones, tipoUnidad, horasMotor,
+  } = body;
+  const numeroSerieCaja = pickNumeroSerieCaja(body);
   if (!placas || !marca || !modelo) {
     return res.status(400).json({ error: 'Placas, marca y modelo son requeridos' });
+  }
+  if (!numeroSerieCaja) {
+    return res.status(400).json({ error: 'El número de serie de la caja es requerido' });
   }
   if (existePlacas(placas)) {
     return res.status(400).json({ error: 'Ya existe una unidad con esas placas' });
   }
   try {
-    const unidad = createUnidad({ placas, marca, modelo, estatus, kilometraje, combustiblePct, observaciones }, req.user.id);
+    const unidad = createUnidad(
+      {
+        placas,
+        marca,
+        modelo,
+        estatus,
+        numeroSerieCaja,
+        subestatusDisponible,
+        ubicacionDisponible,
+        kilometraje,
+        combustiblePct,
+        observaciones,
+        tipoUnidad,
+        horasMotor,
+      },
+      req.user.id
+    );
+    if (!unidad) return res.status(400).json({ error: 'Datos inválidos para registrar unidad' });
     res.status(201).json({ unidad });
   } catch (err) {
-    res.status(500).json({ error: 'Error al crear unidad' });
+    console.error('POST /api/unidades', err);
+    const code = err && typeof err === 'object' ? err.code : null;
+    const msg = err && typeof err === 'object' && 'message' in err ? String(err.message) : String(err);
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed.*unidades\.placas/i.test(msg)) {
+      return res.status(400).json({ error: 'Ya existe una unidad con esas placas' });
+    }
+    const isDev = process.env.NODE_ENV !== 'production';
+    res.status(500).json({
+      error: isDev ? `Error al crear unidad: ${msg}` : 'Error al crear unidad',
+    });
   }
 });
 
@@ -380,9 +529,18 @@ app.put('/api/unidades/:id', requireAuth, (req, res) => {
   const id = req.params.id;
   const unidad = getUnidadById(id);
   if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
-  const { placas, marca, modelo, estatus, kilometraje, combustiblePct, observaciones } = req.body || {};
+  const body = req.body || {};
+  const {
+    placas, marca, modelo, estatus, subestatusDisponible, ubicacionDisponible,
+    kilometraje, combustiblePct, observaciones, tipoUnidad, estadoMantenimiento, horasMotor,
+  } = body;
+  const numeroSeriePicked = pickNumeroSerieCaja(body);
+  const numeroSerieCaja = numeroSeriePicked !== undefined ? numeroSeriePicked : undefined;
   if (placas != null && existePlacas(placas, Number(id))) {
     return res.status(400).json({ error: 'Ya existe otra unidad con esas placas' });
+  }
+  if (numeroSerieCaja !== undefined && !numeroSerieCaja) {
+    return res.status(400).json({ error: 'El número de serie de la caja no puede estar vacío' });
   }
   try {
     const updated = updateUnidadDb(
@@ -392,12 +550,19 @@ app.put('/api/unidades/:id', requireAuth, (req, res) => {
         marca,
         modelo,
         estatus,
+        numeroSerieCaja,
+        subestatusDisponible,
+        ubicacionDisponible,
         kilometraje,
         combustiblePct,
         observaciones,
+        tipoUnidad,
+        estadoMantenimiento,
+        horasMotor,
       },
       req.user.id
     );
+    if (!updated) return res.status(400).json({ error: 'Datos inválidos para actualizar unidad' });
     res.json({ unidad: updated });
   } catch (err) {
     res.status(500).json({ error: 'Error al actualizar unidad' });
@@ -417,14 +582,46 @@ app.patch('/api/unidades/:id/estatus', requireAuth, (req, res) => {
 });
 
 app.post('/api/unidades/:id/documentos', requireAuth, (req, res) => {
-  const { tipo, nombre } = req.body || {};
-  if (!tipo || !nombre) return res.status(400).json({ error: 'Tipo y nombre del documento requeridos' });
   try {
-    const unidad = addUnidadDocumento(req.params.id, tipo, nombre, req.user.id);
+    const tipo = String(req.body?.tipo ?? '').trim();
+    const nombreArchivo = String(req.body?.nombreArchivo ?? req.body?.nombre ?? '').trim();
+    const archivoBase64 = req.body?.archivoBase64;
+    if (!tipo) return res.status(400).json({ error: 'Tipo de documento requerido' });
+    if (!nombreArchivo) {
+      return res.status(400).json({ error: 'Falta el nombre del archivo (nombreArchivo).' });
+    }
+    if (typeof archivoBase64 !== 'string' || !String(archivoBase64).trim()) {
+      return res.status(400).json({ error: 'Falta el contenido del archivo (archivoBase64).' });
+    }
+    const { nombre, ruta } = saveUnidadDocumentoFromBase64(req.params.id, nombreArchivo, archivoBase64);
+    const unidad = addUnidadDocumento(req.params.id, tipo, nombre, ruta, req.user.id);
     if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
     res.status(201).json({ unidad });
   } catch (err) {
-    res.status(500).json({ error: 'Error al agregar documento' });
+    console.error('POST /api/unidades/:id/documentos', err);
+    const msg = err && typeof err === 'object' && 'message' in err ? String(err.message) : String(err);
+    const status = /demasiado|inválido|vacío/i.test(msg) ? 400 : 500;
+    res.status(status).json({
+      error: status === 400 ? msg : 'Error al agregar documento',
+    });
+  }
+});
+
+app.delete('/api/unidades/:id/documentos/:docId', requireAuth, (req, res) => {
+  try {
+    const deleted = deleteUnidadDocumento(req.params.docId, req.user.id);
+    if (!deleted || String(deleted.unidadId) !== String(req.params.id)) {
+      return res.status(404).json({ error: 'Documento no encontrado' });
+    }
+    if (deleted.ruta) {
+      const fullPath = join(__dirname, 'uploads', deleted.ruta);
+      fs.unlink(fullPath, () => {});
+    }
+    const unidad = getUnidadById(req.params.id);
+    if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
+    res.json({ unidad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al eliminar documento' });
   }
 });
 
@@ -515,6 +712,8 @@ app.post('/api/checkin-out', requireAuth, (req, res) => {
         combustiblePct: body.combustiblePct,
         checklist: body.checklist,
         observaciones: body.observaciones,
+        modalidad: body.modalidad,
+        inspeccion: body.inspeccion,
       },
       req.user.id
     );
@@ -541,6 +740,8 @@ app.put('/api/checkin-out/:id', requireAuth, (req, res) => {
         combustiblePct: body.combustiblePct,
         checklist: body.checklist,
         observaciones: body.observaciones,
+        modalidad: body.modalidad,
+        inspeccion: body.inspeccion,
       },
       req.user.id
     );
@@ -560,6 +761,42 @@ app.delete('/api/checkin-out/:id', requireAuth, (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al eliminar' });
+  }
+});
+
+app.post('/api/checkin-out/:id/imagenes', requireAuth, uploadCheckinFoto.single('imagen'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
+  const descripcion = (req.body.descripcion || '').trim();
+  const ruta = `checkin-out/${req.params.id}/${req.file.filename}`;
+  try {
+    const reg = addCheckinOutImagen(req.params.id, req.file.originalname, ruta, descripcion, req.user.id);
+    if (!reg) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Registro no encontrado' });
+    }
+    res.status(201).json({ registro: reg });
+  } catch (err) {
+    console.error(err);
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: 'Error al subir evidencia' });
+  }
+});
+
+app.delete('/api/checkin-out/:id/imagenes/:imgId', requireAuth, (req, res) => {
+  try {
+    const deleted = deleteCheckinOutImagen(req.params.imgId, req.user.id);
+    if (!deleted || String(deleted.registroId) !== String(req.params.id)) {
+      return res.status(404).json({ error: 'Imagen no encontrada' });
+    }
+    if (deleted.ruta) {
+      fs.unlink(join(__dirname, 'uploads', deleted.ruta), () => {});
+    }
+    const reg = getCheckinOutRegistroById(req.params.id);
+    if (!reg) return res.status(404).json({ error: 'Registro no encontrado' });
+    res.json({ registro: reg });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar imagen' });
   }
 });
 
@@ -664,6 +901,7 @@ app.post('/api/rentas', requireAuth, (req, res) => {
   const body = req.body || {};
   const data = {
     unidadId: body.unidadId,
+    clienteId: body.clienteId != null && body.clienteId !== '' ? body.clienteId : undefined,
     clienteNombre: body.clienteNombre,
     clienteTelefono: body.clienteTelefono || '',
     clienteEmail: body.clienteEmail || '',
@@ -696,6 +934,9 @@ app.put('/api/rentas/:id', requireAuth, (req, res) => {
   const body = req.body || {};
   const data = {};
   if (body.unidadId != null) data.unidadId = body.unidadId;
+  if (body.clienteId !== undefined) {
+    data.clienteId = body.clienteId === null || body.clienteId === '' ? null : body.clienteId;
+  }
   if (body.clienteNombre != null) data.clienteNombre = body.clienteNombre;
   if (body.clienteTelefono != null) data.clienteTelefono = body.clienteTelefono;
   if (body.clienteEmail != null) data.clienteEmail = body.clienteEmail;
@@ -777,6 +1018,116 @@ const uploadRentaDoc = multer({
   },
 });
 
+const clienteDocStorage = multer.diskStorage({
+  destination: (req, _file, cb) => {
+    const dir = join(CLIENTE_DOCS_DIR, String(req.params.id));
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = (file.originalname.match(/\.\w+$/) || ['.pdf'])[0];
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const uploadClienteDoc = multer({
+  storage: clienteDocStorage,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const ok = /^application\/(pdf|msword)|^image\//i.test(file.mimetype) || /\.(pdf|doc|docx|jpg|jpeg|png)$/i.test(file.originalname);
+    cb(null, !!ok);
+  },
+});
+
+app.get('/api/clientes', requireAuth, (_req, res) => {
+  try {
+    res.json({ clientes: getAllClientes() });
+  } catch (err) {
+    console.error('GET /api/clientes', err);
+    res.status(500).json({ error: 'Error al listar clientes' });
+  }
+});
+
+app.get('/api/clientes/:id', requireAuth, (req, res) => {
+  try {
+    const cliente = getClienteById(req.params.id);
+    if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
+    res.json({ cliente });
+  } catch (err) {
+    console.error('GET /api/clientes/:id', err);
+    res.status(500).json({ error: 'Error al cargar cliente' });
+  }
+});
+
+app.post('/api/clientes', requireAuth, (req, res) => {
+  try {
+    const cliente = createCliente(req.body || {}, req.user.id);
+    if (!cliente) return res.status(400).json({ error: 'Nombre comercial es requerido' });
+    res.status(201).json({ cliente });
+  } catch (err) {
+    console.error('POST /api/clientes', err);
+    res.status(500).json({ error: 'Error al crear cliente' });
+  }
+});
+
+app.put('/api/clientes/:id', requireAuth, (req, res) => {
+  try {
+    const cliente = updateCliente(req.params.id, req.body || {}, req.user.id);
+    if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
+    res.json({ cliente });
+  } catch (err) {
+    console.error('PUT /api/clientes/:id', err);
+    res.status(500).json({ error: 'Error al actualizar cliente' });
+  }
+});
+
+app.delete('/api/clientes/:id', requireAuth, (req, res) => {
+  try {
+    const ok = deleteClienteSoft(req.params.id, req.user.id);
+    if (!ok) return res.status(404).json({ error: 'Cliente no encontrado' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /api/clientes/:id', err);
+    res.status(500).json({ error: 'Error al desactivar cliente' });
+  }
+});
+
+app.post('/api/clientes/:id/documentos', requireAuth, uploadClienteDoc.single('documento'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se envió ningún documento' });
+  const tipo = (req.body.tipo || 'otro').trim();
+  const nombre = (req.body.nombre || req.file.originalname).trim();
+  const ruta = `clientes/${req.params.id}/${req.file.filename}`;
+  try {
+    const cliente = addClienteDocumento(req.params.id, tipo, nombre, ruta, req.user.id);
+    if (!cliente) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    res.status(201).json({ cliente });
+  } catch (err) {
+    console.error('POST cliente documento', err);
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: 'Error al subir documento' });
+  }
+});
+
+app.delete('/api/clientes/:id/documentos/:docId', requireAuth, (req, res) => {
+  try {
+    const out = deleteClienteDocumento(req.params.docId, req.user.id);
+    if (!out || String(out.clienteId) !== String(req.params.id)) {
+      return res.status(404).json({ error: 'Documento no encontrado' });
+    }
+    if (out.ruta && !out.ruta.includes('..')) {
+      const abs = join(__dirname, 'uploads', out.ruta);
+      fs.unlink(abs, () => {});
+    }
+    const cliente = getClienteById(req.params.id);
+    res.json({ cliente });
+  } catch (err) {
+    console.error('DELETE cliente documento', err);
+    res.status(500).json({ error: 'Error al eliminar documento' });
+  }
+});
+
 app.post('/api/rentas/:id/documentos', requireAuth, uploadRentaDoc.single('documento'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No se envió ningún documento' });
   const tipo = (req.body.tipo || 'contrato').trim();
@@ -818,6 +1169,7 @@ app.post('/api/mantenimiento', requireAuth, (req, res) => {
     const mantenimiento = createMantenimiento(
       {
         unidadId: body.unidadId,
+        proveedorId: body.proveedorId,
         tipo: body.tipo || 'preventivo',
         descripcion: body.descripcion || '',
         costo: body.costo || 0,
@@ -837,18 +1189,18 @@ app.post('/api/mantenimiento', requireAuth, (req, res) => {
 app.put('/api/mantenimiento/:id', requireAuth, (req, res) => {
   const body = req.body || {};
   try {
-    const mantenimiento = updateMantenimiento(
-      req.params.id,
-      {
-        tipo: body.tipo,
-        descripcion: body.descripcion,
-        costo: body.costo,
-        fechaInicio: body.fechaInicio,
-        fechaFin: body.fechaFin,
-        estado: body.estado,
-      },
-      req.user.id
-    );
+    const patch = {
+      tipo: body.tipo,
+      descripcion: body.descripcion,
+      costo: body.costo,
+      fechaInicio: body.fechaInicio,
+      fechaFin: body.fechaFin,
+      estado: body.estado,
+    };
+    if (Object.prototype.hasOwnProperty.call(body, 'proveedorId')) {
+      patch.proveedorId = body.proveedorId;
+    }
+    const mantenimiento = updateMantenimiento(req.params.id, patch, req.user.id);
     if (!mantenimiento) return res.status(404).json({ error: 'Mantenimiento no encontrado' });
     res.json({ mantenimiento });
   } catch (err) {
@@ -921,6 +1273,16 @@ app.get('/api/proveedores/reportes/por-unidad', ...proveedoresHandlers, (_req, r
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al generar reporte' });
+  }
+});
+
+/** Catálogo activo para asignar proveedor en mantenimiento (solo lectura). */
+app.get('/api/proveedores/catalogo', requireAuth, (_req, res) => {
+  try {
+    res.json({ proveedores: getProveedoresCatalogo() });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al cargar catálogo de proveedores' });
   }
 });
 
@@ -1060,6 +1422,19 @@ if (existsSync(distPath)) {
   });
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Servidor SKYLINE ERP en http://localhost:${PORT}`);
+});
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(
+      `[Skyline ERP] El puerto ${PORT} ya está en uso. Cierra el otro Node que lo ocupa ` +
+        `(PowerShell: netstat -ano | findstr :${PORT}  luego  taskkill /PID <número> /F) ` +
+        `o define otra variable PORT y reinicia. Mientras tanto Vite en :5173 puede parecer «funcionar» ` +
+        `pero las llamadas a /api irán al proceso viejo y verás HTML en lugar de JSON.`
+    );
+  } else {
+    console.error('[Skyline ERP] Error al escuchar:', err);
+  }
+  process.exit(1);
 });

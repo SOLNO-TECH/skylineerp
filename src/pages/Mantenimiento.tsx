@@ -3,10 +3,12 @@ import { useNotification } from '../context/NotificationContext';
 import {
   getMantenimientos,
   getUnidades,
+  getProveedoresCatalogo,
   createMantenimiento,
   updateMantenimiento,
   type MantenimientoRow,
   type UnidadRow,
+  type ProveedorCatalogoRow,
 } from '../api/client';
 
 const TIPOS = [
@@ -37,6 +39,8 @@ function textoBusquedaMantenimiento(m: MantenimientoRow): string {
     m.marca,
     m.modelo,
     m.descripcion,
+    m.proveedorNombre,
+    m.proveedorId,
     m.tipo,
     tipoLabel,
     m.estado,
@@ -60,12 +64,14 @@ function coincideBusqueda(m: MantenimientoRow, q: string): boolean {
 export function Mantenimiento() {
   const [mantenimientos, setMantenimientos] = useState<MantenimientoRow[]>([]);
   const [unidades, setUnidades] = useState<UnidadRow[]>([]);
+  const [proveedoresCat, setProveedoresCat] = useState<ProveedorCatalogoRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalAbierto, setModalAbierto] = useState(false);
   const [editando, setEditando] = useState<MantenimientoRow | null>(null);
   const [form, setForm] = useState({
     unidadId: '',
+    proveedorId: '',
     tipo: 'preventivo',
     descripcion: '',
     costo: '',
@@ -86,9 +92,14 @@ export function Mantenimiento() {
     setLoading(true);
     setError(null);
     try {
-      const [m, u] = await Promise.all([getMantenimientos(), getUnidades()]);
+      const [m, u, prov] = await Promise.all([
+        getMantenimientos(),
+        getUnidades(),
+        getProveedoresCatalogo().catch(() => [] as ProveedorCatalogoRow[]),
+      ]);
       setMantenimientos(m);
       setUnidades(u);
+      setProveedoresCat(prov);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al cargar');
     } finally {
@@ -104,6 +115,7 @@ export function Mantenimiento() {
     setEditando(null);
     setForm({
       unidadId: unidades[0]?.id ?? '',
+      proveedorId: '',
       tipo: 'preventivo',
       descripcion: '',
       costo: '',
@@ -118,6 +130,7 @@ export function Mantenimiento() {
     setEditando(m);
     setForm({
       unidadId: m.unidadId,
+      proveedorId: m.proveedorId ?? '',
       tipo: m.tipo,
       descripcion: m.descripcion,
       costo: String(m.costo ?? ''),
@@ -141,11 +154,13 @@ export function Mantenimiento() {
           fechaInicio: form.fechaInicio,
           fechaFin: form.fechaFin || null,
           estado: form.estado,
+          proveedorId: form.proveedorId || null,
         });
         toast('Mantenimiento actualizado');
       } else {
         await createMantenimiento({
           unidadId: form.unidadId,
+          proveedorId: form.proveedorId || undefined,
           tipo: form.tipo,
           descripcion: form.descripcion,
           costo: parseFloat(form.costo) || 0,
@@ -196,7 +211,7 @@ export function Mantenimiento() {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Mantenimiento</h1>
           <p className="mt-1 text-sm font-medium text-gray-500">
-            Historial por unidad, estado (disponible, en mantenimiento, fuera de servicio)
+            Asigna unidad y proveedor de servicio; el costo se acumula en el expediente del proveedor en Administración.
           </p>
         </div>
         <button type="button" className="btn btn-primary" onClick={abrirNuevo}>
@@ -232,6 +247,11 @@ export function Mantenimiento() {
                       {m.placas ?? m.unidadId} · {m.marca} {m.modelo}
                     </strong>
                     <span className="text-sm text-gray-600">{m.descripcion || m.tipo}</span>
+                    {m.proveedorNombre ? (
+                      <span className="mt-0.5 block text-xs text-skyline-blue">
+                        Proveedor: {m.proveedorNombre}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-2">
                     <span
@@ -378,6 +398,7 @@ export function Mantenimiento() {
               <thead>
                 <tr className="border-b border-skyline-border text-left">
                   <th className="py-2 font-medium text-gray-600">Unidad</th>
+                  <th className="py-2 font-medium text-gray-600">Proveedor</th>
                   <th className="py-2 font-medium text-gray-600">Tipo</th>
                   <th className="py-2 font-medium text-gray-600">Descripción</th>
                   <th className="py-2 font-medium text-gray-600">Fechas</th>
@@ -388,7 +409,7 @@ export function Mantenimiento() {
               <tbody>
                 {mantenimientosFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-10 text-center text-gray-500">
+                    <td colSpan={7} className="py-10 text-center text-gray-500">
                       {mantenimientos.length === 0
                         ? 'Sin registros. Usa «Registrar servicio» para agregar uno.'
                         : hayFiltros
@@ -404,6 +425,13 @@ export function Mantenimiento() {
                       onClick={() => abrirEditar(m)}
                     >
                       <td className="py-2 font-medium">{m.placas ?? m.unidadId}</td>
+                      <td className="py-2 text-gray-700">
+                        {m.proveedorNombre ? (
+                          <span className="text-sm">{m.proveedorNombre}</span>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
                       <td className="py-2 capitalize">{m.tipo}</td>
                       <td className="py-2 max-w-[200px] truncate">{m.descripcion || '-'}</td>
                       <td className="py-2 text-gray-600">
@@ -460,6 +488,26 @@ export function Mantenimiento() {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Proveedor de servicio (taller / refacciones)
+                </label>
+                <select
+                  value={form.proveedorId}
+                  onChange={(e) => setForm((f) => ({ ...f, proveedorId: e.target.value }))}
+                  className="input w-full"
+                >
+                  <option value="">Sin proveedor en catálogo</option>
+                  {proveedoresCat.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombreRazonSocial}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  El costo de este registro se suma al total de mantenimiento del proveedor en su expediente.
+                </p>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Tipo</label>

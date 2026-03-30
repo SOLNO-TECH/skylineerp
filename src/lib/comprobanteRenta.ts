@@ -12,7 +12,7 @@ const ESTADOS_RENTA: Record<string, string> = {
 const TIPOS_UNIDAD: Record<string, string> = {
   remolque_seco: 'Remolque seco',
   refrigerado: 'Refrigerado',
-  maquinaria: 'Maquinaria',
+  maquinaria: 'Mulita',
 };
 
 const TIPOS_SERVICIO: Record<string, string> = {
@@ -122,7 +122,7 @@ function buildDocumentHtml(renta: RentaRow): string {
       maq.observaciones)
       ? `
     <div class="box" style="margin-bottom: 14px;">
-      <h2>Maquinaria</h2>
+      <h2>Mulita</h2>
       <dl>
         <dt>Operador</dt><dd>${esc(maq.operadorAsignado || '—')}</dd>
         <dt>Horas trabajadas</dt><dd>${esc(maq.horasTrabajadas ?? '—')}</dd>

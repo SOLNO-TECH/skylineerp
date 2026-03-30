@@ -6,12 +6,14 @@ import {
   getRentas,
   getRentasCalendario,
   getUnidades,
+  getClientes,
   createRenta,
   updateRenta,
   deleteRenta,
   type RentaRow,
   type RentaCalendario,
   type UnidadRow,
+  type ClienteListRow,
 } from '../api/client';
 import { MapPicker } from '../components/MapPicker';
 
@@ -86,7 +88,7 @@ const ESTADOS_LOG_OPT = [
 const TIPOS_UNIDAD_LABEL: Record<string, string> = {
   remolque_seco: 'Remolque',
   refrigerado: 'Refrigerado',
-  maquinaria: 'Maquinaria',
+  maquinaria: 'Mulita',
 };
 
 export function Rentas() {
@@ -95,6 +97,7 @@ export function Rentas() {
   const [rentas, setRentas] = useState<RentaRow[]>([]);
   const [calendario, setCalendario] = useState<RentaCalendario[]>([]);
   const [unidades, setUnidades] = useState<UnidadRow[]>([]);
+  const [clientes, setClientes] = useState<ClienteListRow[]>([]);
   const [ano, setAno] = useState(() => new Date().getFullYear());
   const [mes, setMes] = useState(() => new Date().getMonth() + 1);
   const [loading, setLoading] = useState(true);
@@ -103,6 +106,7 @@ export function Rentas() {
   const [editando, setEditando] = useState<RentaRow | null>(null);
   const [form, setForm] = useState({
     unidadId: '',
+    clienteId: '',
     clienteNombre: '',
     clienteTelefono: '',
     clienteEmail: '',
@@ -139,14 +143,16 @@ export function Rentas() {
     setLoading(true);
     setError(null);
     try {
-      const [r, c, u] = await Promise.all([
+      const [r, c, u, cl] = await Promise.all([
         getRentas(),
         getRentasCalendario(ano, mes),
         getUnidades(),
+        getClientes(),
       ]);
       setRentas(r);
       setCalendario(c);
       setUnidades(u);
+      setClientes(cl);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al cargar datos');
     } finally {
@@ -211,6 +217,7 @@ export function Rentas() {
     const primeraDisponible = unidades.find((u) => u.estatus === 'Disponible')?.id ?? '';
     setForm({
       unidadId: primeraDisponible,
+      clienteId: '',
       clienteNombre: '',
       clienteTelefono: '',
       clienteEmail: '',
@@ -244,6 +251,7 @@ export function Rentas() {
     setEditando(r);
     setForm({
       unidadId: r.unidadId,
+      clienteId: r.clienteId ?? '',
       clienteNombre: r.clienteNombre,
       clienteTelefono: r.clienteTelefono,
       clienteEmail: r.clienteEmail,
@@ -329,8 +337,15 @@ export function Rentas() {
         };
         payload.operadorAsignado = form.maqOperador.trim();
       }
+      if (form.clienteId) {
+        payload.clienteId = form.clienteId;
+      }
       if (editando) {
-        await updateRenta(editando.id, { ...payload, estado: editando.estado } as never);
+        await updateRenta(editando.id, {
+          ...(payload as object),
+          estado: editando.estado,
+          clienteId: form.clienteId || null,
+        } as never);
         toast('Renta actualizada correctamente');
       } else {
         await createRenta(payload as never);
@@ -644,7 +659,7 @@ export function Rentas() {
                     <option value="">Todos</option>
                     <option value="remolque_seco">Remolque</option>
                     <option value="refrigerado">Refrigerado</option>
-                    <option value="maquinaria">Maquinaria</option>
+                    <option value="maquinaria">Mulita</option>
                   </select>
                 </div>
               </div>
@@ -814,6 +829,49 @@ export function Rentas() {
               />
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Cliente del catálogo (opcional)
+                </label>
+                <select
+                  value={form.clienteId}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const cli = clientes.find((c) => c.id === v);
+                    setForm((f) => ({
+                      ...f,
+                      clienteId: v,
+                      clienteNombre: cli
+                        ? (cli.nombreComercial || cli.razonSocial || f.clienteNombre).trim() || f.clienteNombre
+                        : f.clienteNombre,
+                      clienteTelefono: cli ? (cli.telefono || f.clienteTelefono) : f.clienteTelefono,
+                      clienteEmail: cli ? (cli.email || f.clienteEmail) : f.clienteEmail,
+                    }));
+                  }}
+                  className="input w-full"
+                >
+                  <option value="">Sin vínculo — solo datos en esta renta</option>
+                  {clientes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {(c.nombreComercial || c.razonSocial || `#${c.id}`).trim()}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Registra primero el expediente en{' '}
+                  <button
+                    type="button"
+                    className="text-skyline-blue underline"
+                    onClick={() => {
+                      cerrarModal();
+                      navigate('/clientes');
+                    }}
+                  >
+                    Clientes
+                  </button>{' '}
+                  y luego elígelo aquí para mantener documentos y datos alineados.
+                </p>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
                   Nombre del cliente *
                 </label>
                 <input
@@ -923,7 +981,7 @@ export function Rentas() {
               )}
               {unidadSeleccionada?.tipoUnidad === 'maquinaria' && (
                 <div className="rounded border border-skyline-border p-3">
-                  <h4 className="mb-2 text-sm font-semibold text-gray-700">Datos maquinaria</h4>
+                  <h4 className="mb-2 text-sm font-semibold text-gray-700">Datos mulita</h4>
                   <div className="space-y-2">
                     <div><label className="text-xs text-gray-500">Horas trabajadas</label><input type="number" min={0} step={0.5} value={form.maqHoras} onChange={(e) => setForm((f) => ({ ...f, maqHoras: e.target.value }))} className="input w-full" /></div>
                     <div><label className="text-xs text-gray-500">Tipo de trabajo</label><input type="text" value={form.maqTrabajo} onChange={(e) => setForm((f) => ({ ...f, maqTrabajo: e.target.value }))} className="input w-full" placeholder="Construcción, demolición, etc." /></div>

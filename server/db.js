@@ -80,6 +80,21 @@ export function initDb() {
   initCheckinOut();
   initSistemaActividad();
   initProveedores();
+  migrateMantenimientoProveedor();
+  initClientes();
+}
+
+/** Añade proveedor_id a mantenimiento (después de que exista la tabla proveedores). */
+function migrateMantenimientoProveedor() {
+  try {
+    const cols = db.prepare('PRAGMA table_info(mantenimiento)').all().map((c) => c.name);
+    if (!cols.includes('proveedor_id')) {
+      db.exec('ALTER TABLE mantenimiento ADD COLUMN proveedor_id INTEGER');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_mantenimiento_proveedor ON mantenimiento(proveedor_id)');
+    }
+  } catch (e) {
+    console.warn('Migración mantenimiento.proveedor_id:', e?.message);
+  }
 }
 
 function initCheckinOut() {
@@ -96,6 +111,8 @@ function initCheckinOut() {
       combustible_pct INTEGER,
       checklist_json TEXT DEFAULT '[]',
       observaciones TEXT DEFAULT '',
+      modalidad TEXT DEFAULT 'caja_seca',
+      inspeccion_json TEXT DEFAULT '{}',
       creado_en TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (unidad_id) REFERENCES unidades(id),
       FOREIGN KEY (renta_id) REFERENCES rentas(id) ON DELETE SET NULL,
@@ -104,6 +121,33 @@ function initCheckinOut() {
     CREATE INDEX IF NOT EXISTS idx_checkin_out_unidad ON checkin_out_registros(unidad_id);
     CREATE INDEX IF NOT EXISTS idx_checkin_out_creado ON checkin_out_registros(creado_en DESC);
   `);
+  migrarCheckinOut();
+}
+
+function migrarCheckinOut() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(checkin_out_registros)").all().map((r) => r.name);
+    if (!cols.includes('modalidad')) db.exec("ALTER TABLE checkin_out_registros ADD COLUMN modalidad TEXT DEFAULT 'caja_seca'");
+    if (!cols.includes('inspeccion_json')) db.exec("ALTER TABLE checkin_out_registros ADD COLUMN inspeccion_json TEXT DEFAULT '{}'");
+  } catch (e) {
+    console.warn('Migración checkin_out_registros:', e?.message);
+  }
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS checkin_out_imagenes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        registro_id INTEGER NOT NULL,
+        nombre_archivo TEXT NOT NULL,
+        ruta TEXT NOT NULL,
+        descripcion TEXT DEFAULT '',
+        creado_en TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (registro_id) REFERENCES checkin_out_registros(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_checkin_out_img_reg ON checkin_out_imagenes(registro_id);
+    `);
+  } catch (e) {
+    console.warn('Migración checkin_out_imagenes:', e?.message);
+  }
 }
 
 /* ─── Registro global de actividad (auditoría) ─── */
@@ -198,7 +242,18 @@ function migrarUnidades() {
     if (!cols.includes('tipo_unidad')) db.exec("ALTER TABLE unidades ADD COLUMN tipo_unidad TEXT DEFAULT 'remolque_seco'");
     if (!cols.includes('estado_mantenimiento')) db.exec("ALTER TABLE unidades ADD COLUMN estado_mantenimiento TEXT DEFAULT 'disponible'");
     if (!cols.includes('horas_motor')) db.exec('ALTER TABLE unidades ADD COLUMN horas_motor INTEGER DEFAULT 0');
+    if (!cols.includes('numero_serie_caja')) db.exec("ALTER TABLE unidades ADD COLUMN numero_serie_caja TEXT DEFAULT ''");
+    if (!cols.includes('subestatus_disponible')) db.exec("ALTER TABLE unidades ADD COLUMN subestatus_disponible TEXT DEFAULT 'disponible'");
+    if (!cols.includes('ubicacion_disponible')) db.exec("ALTER TABLE unidades ADD COLUMN ubicacion_disponible TEXT DEFAULT 'lote'");
+    db.exec("UPDATE unidades SET estatus = 'Disponible', subestatus_disponible = 'taller' WHERE estatus = 'Taller'");
+    // Marcador claro cuando nunca se capturó serie (no es un “formato” de negocio).
+    db.exec("UPDATE unidades SET numero_serie_caja = 'PENDIENTE-' || id WHERE TRIM(COALESCE(numero_serie_caja, '')) = ''");
+    db.exec("UPDATE unidades SET numero_serie_caja = 'PENDIENTE-' || id WHERE numero_serie_caja = 'SIN-SERIE-' || id");
   } catch (e) { console.warn('Migración unidades:', e?.message); }
+  try {
+    const docCols = db.prepare("PRAGMA table_info(unidad_documentos)").all().map(r => r.name);
+    if (!docCols.includes('ruta')) db.exec("ALTER TABLE unidad_documentos ADD COLUMN ruta TEXT DEFAULT ''");
+  } catch (e) { console.warn('Migración unidad_documentos:', e?.message); }
 }
 
 /* ─── Rentas ─── */
@@ -335,7 +390,7 @@ function initMantenimiento() {
 
 export function getAllRentas() {
   const rows = db.prepare(
-    `SELECT r.id, r.unidad_id, r.cliente_nombre, r.cliente_telefono, r.cliente_email, r.fecha_inicio, r.fecha_fin, r.estado,
+    `SELECT r.id, r.unidad_id, r.cliente_id, r.cliente_nombre, r.cliente_telefono, r.cliente_email, r.fecha_inicio, r.fecha_fin, r.estado,
             r.monto, r.deposito, r.observaciones, r.creado_en,
             r.tipo_servicio, r.ubicacion_entrega, r.ubicacion_recoleccion, r.estado_logistico, r.precio_base, r.extras, r.operador_asignado,
             u.placas, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
@@ -354,6 +409,7 @@ function mapRentaRow(r) {
     marca: r.marca,
     modelo: r.modelo,
     tipoUnidad: r.tipo_unidad || 'remolque_seco',
+    clienteId: r.cliente_id != null && r.cliente_id !== '' ? String(r.cliente_id) : undefined,
     clienteNombre: r.cliente_nombre,
     clienteTelefono: r.cliente_telefono || '',
     clienteEmail: r.cliente_email || '',
@@ -430,24 +486,45 @@ export function getRentaById(id) {
 
 export function createRenta(data, usuarioId = null) {
   const {
-    unidadId, clienteNombre, clienteTelefono, clienteEmail, fechaInicio, fechaFin,
+    unidadId, clienteNombre, clienteTelefono, clienteEmail, clienteId, fechaInicio, fechaFin,
     monto, deposito, observaciones, tipoServicio, ubicacionEntrega, ubicacionRecoleccion,
     precioBase, extras, operadorAsignado, refrigerado, maquinaria,
   } = data;
-  if (!unidadId || !clienteNombre || !fechaInicio || !fechaFin) return null;
+  let resolvedNombre = String(clienteNombre || '').trim();
+  let resolvedTel = String(clienteTelefono || '').trim();
+  let resolvedEmail = String(clienteEmail || '').trim();
+  let resolvedClienteId = null;
+  if (clienteId != null && clienteId !== '') {
+    const cid = Number(clienteId);
+    if (!Number.isFinite(cid)) return null;
+    const cli = db
+      .prepare(
+        'SELECT id, nombre_comercial, razon_social, telefono, email FROM clientes WHERE id = ? AND activo = 1'
+      )
+      .get(cid);
+    if (!cli) return null;
+    resolvedClienteId = cid;
+    if (!resolvedNombre) {
+      resolvedNombre = String(cli.nombre_comercial || cli.razon_social || '').trim();
+    }
+    if (!resolvedTel) resolvedTel = String(cli.telefono || '').trim();
+    if (!resolvedEmail) resolvedEmail = String(cli.email || '').trim();
+  }
+  if (!unidadId || !resolvedNombre || !fechaInicio || !fechaFin) return null;
   const u = db.prepare('SELECT id, tipo_unidad FROM unidades WHERE id = ? AND activo = 1').get(Number(unidadId));
   if (!u) return null;
   if (fechaInicio > fechaFin) return null;
   const total = (Number(precioBase) || 0) + (Number(extras) || 0) || Number(monto) || 0;
   const r = db.prepare(
-    `INSERT INTO rentas (unidad_id, cliente_nombre, cliente_telefono, cliente_email, fecha_inicio, fecha_fin, estado, monto, deposito, observaciones,
+    `INSERT INTO rentas (unidad_id, cliente_id, cliente_nombre, cliente_telefono, cliente_email, fecha_inicio, fecha_fin, estado, monto, deposito, observaciones,
       tipo_servicio, ubicacion_entrega, ubicacion_recoleccion, estado_logistico, precio_base, extras, operador_asignado)
-     VALUES (?, ?, ?, ?, ?, ?, 'reservada', ?, ?, ?, ?, ?, ?, 'programado', ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'reservada', ?, ?, ?, ?, ?, ?, 'programado', ?, ?, ?)`
   ).run(
     Number(unidadId),
-    String(clienteNombre).trim(),
-    String(clienteTelefono || '').trim(),
-    String(clienteEmail || '').trim(),
+    resolvedClienteId,
+    resolvedNombre,
+    resolvedTel,
+    resolvedEmail,
     fechaInicio,
     fechaFin,
     total,
@@ -487,7 +564,7 @@ export function createRenta(data, usuarioId = null) {
       String(maquinaria.observaciones || '').trim()
     );
   }
-  addRentaHistorial(rentaId, 'Renta creada', `Reservación registrada para ${data.clienteNombre}`, usuarioId, 'mdi:calendar-plus');
+  addRentaHistorial(rentaId, 'Renta creada', `Reservación registrada para ${resolvedNombre}`, usuarioId, 'mdi:calendar-plus');
   return getRentaById(rentaId);
 }
 
@@ -526,11 +603,22 @@ export function updateRenta(id, data, usuarioId = null) {
   const updates = [];
   const values = [];
   const {
-    unidadId, clienteNombre, clienteTelefono, clienteEmail, fechaInicio, fechaFin, estado, monto, deposito, observaciones,
+    unidadId, clienteNombre, clienteTelefono, clienteEmail, clienteId, fechaInicio, fechaFin, estado, monto, deposito, observaciones,
     tipoServicio, ubicacionEntrega, ubicacionRecoleccion, estadoLogistico, precioBase, extras, operadorAsignado,
     refrigerado, maquinaria,
   } = data;
   if (unidadId != null) { updates.push('unidad_id = ?'); values.push(Number(unidadId)); }
+  if ('clienteId' in data) {
+    if (data.clienteId == null || data.clienteId === '') {
+      updates.push('cliente_id = NULL');
+    } else {
+      const cid = Number(data.clienteId);
+      const cli = db.prepare('SELECT id FROM clientes WHERE id = ? AND activo = 1').get(cid);
+      if (!cli) return null;
+      updates.push('cliente_id = ?');
+      values.push(cid);
+    }
+  }
   if (clienteNombre != null) { updates.push('cliente_nombre = ?'); values.push(String(clienteNombre).trim()); }
   if (clienteTelefono != null) { updates.push('cliente_telefono = ?'); values.push(String(clienteTelefono || '')); }
   if (clienteEmail != null) { updates.push('cliente_email = ?'); values.push(String(clienteEmail || '')); }
@@ -599,6 +687,7 @@ export function updateRenta(id, data, usuarioId = null) {
   const cambios = [];
   if (before) {
     if (unidadId != null && Number(unidadId) !== before.unidad_id) cambios.push(`Unidad ID ${before.unidad_id} → ${unidadId}`);
+    if ('clienteId' in data) cambios.push('Cliente del catálogo actualizado');
     if (clienteNombre != null && String(clienteNombre).trim() !== before.cliente_nombre) cambios.push('Cliente actualizado');
     if (clienteTelefono != null && String(clienteTelefono || '') !== (before.cliente_telefono || '')) cambios.push('Teléfono actualizado');
     if (clienteEmail != null && String(clienteEmail || '') !== (before.cliente_email || '')) cambios.push('Email actualizado');
@@ -660,7 +749,9 @@ export function getActividadReciente(limit = 15) {
      LIMIT ?`
   ).all(max);
   return rows.map((s) => {
-    const tipo = ['unidad', 'renta', 'usuario', 'mantenimiento', 'auth', 'sistema', 'proveedor'].includes(s.categoria)
+    const tipo = ['unidad', 'renta', 'usuario', 'mantenimiento', 'auth', 'sistema', 'proveedor', 'cliente'].includes(
+      s.categoria
+    )
       ? s.categoria
       : 'sistema';
     const out = {
@@ -675,6 +766,7 @@ export function getActividadReciente(limit = 15) {
     if (s.entidad_tipo === 'renta' && s.entidad_id) out.rentaId = String(s.entidad_id);
     if (s.entidad_tipo === 'unidad' && s.entidad_id) out.unidadId = String(s.entidad_id);
     if (s.entidad_tipo === 'mantenimiento' && s.entidad_id) out.mantenimientoId = String(s.entidad_id);
+    if (s.entidad_tipo === 'cliente' && s.entidad_id) out.clienteId = String(s.entidad_id);
     return out;
   });
 }
@@ -742,11 +834,8 @@ export function addRentaHistorialPublic(rentaId, accion, detalle, usuarioId, ico
 const TIPOS_MANTENIMIENTO = ['preventivo', 'correctivo', 'revision'];
 const ESTADOS_MANTENIMIENTO = ['programado', 'en_proceso', 'completado', 'pospuesto'];
 
-export function getMantenimientosByUnidad(unidadId) {
-  const rows = db.prepare(
-    'SELECT * FROM mantenimiento WHERE unidad_id = ? ORDER BY fecha_inicio DESC'
-  ).all(Number(unidadId));
-  return rows.map(m => ({
+function mapMantenimientoRow(m) {
+  const o = {
     id: String(m.id),
     unidadId: String(m.unidad_id),
     tipo: m.tipo,
@@ -756,40 +845,63 @@ export function getMantenimientosByUnidad(unidadId) {
     fechaFin: m.fecha_fin || null,
     estado: m.estado,
     creadoEn: m.creado_en,
-  }));
+  };
+  if (m.placas != null) {
+    o.placas = m.placas;
+    o.marca = m.marca;
+    o.modelo = m.modelo;
+  }
+  if (m.proveedor_id != null && m.proveedor_id !== '') {
+    o.proveedorId = String(m.proveedor_id);
+  }
+  if (m.proveedor_nombre) {
+    o.proveedorNombre = m.proveedor_nombre;
+  }
+  return o;
+}
+
+export function getMantenimientosByUnidad(unidadId) {
+  const rows = db.prepare(
+    `SELECT m.*, p.nombre_razon_social AS proveedor_nombre
+     FROM mantenimiento m
+     LEFT JOIN proveedores p ON p.id = m.proveedor_id
+     WHERE m.unidad_id = ? ORDER BY m.fecha_inicio DESC`
+  ).all(Number(unidadId));
+  return rows.map((m) => mapMantenimientoRow(m));
 }
 
 export function getAllMantenimientos() {
   const rows = db.prepare(
-    `SELECT m.*, u.placas, u.marca, u.modelo FROM mantenimiento m
+    `SELECT m.*, u.placas, u.marca, u.modelo, p.nombre_razon_social AS proveedor_nombre
+     FROM mantenimiento m
      JOIN unidades u ON u.id = m.unidad_id
+     LEFT JOIN proveedores p ON p.id = m.proveedor_id
      ORDER BY m.fecha_inicio DESC`
   ).all();
-  return rows.map(m => ({
-    id: String(m.id),
-    unidadId: String(m.unidad_id),
-    placas: m.placas,
-    marca: m.marca,
-    modelo: m.modelo,
-    tipo: m.tipo,
-    descripcion: m.descripcion || '',
-    costo: m.costo || 0,
-    fechaInicio: m.fecha_inicio,
-    fechaFin: m.fecha_fin || null,
-    estado: m.estado,
-    creadoEn: m.creado_en,
-  }));
+  return rows.map((m) => mapMantenimientoRow(m));
 }
 
 export function createMantenimiento(data, usuarioId = null) {
-  const { unidadId, tipo, descripcion, costo, fechaInicio, fechaFin, estado } = data;
+  const { unidadId, tipo, descripcion, costo, fechaInicio, fechaFin, estado, proveedorId } = data;
   if (!unidadId || !fechaInicio) return null;
   const u = db.prepare('SELECT id, placas FROM unidades WHERE id = ? AND activo = 1').get(Number(unidadId));
   if (!u) return null;
+  let proveedorIdDb = null;
+  let provLabel = '';
+  if (proveedorId != null && proveedorId !== '') {
+    const pid = Number(proveedorId);
+    if (!Number.isFinite(pid)) return null;
+    const pr = db.prepare('SELECT id, nombre_razon_social FROM proveedores WHERE id = ? AND activo = 1').get(pid);
+    if (!pr) return null;
+    proveedorIdDb = pid;
+    provLabel = ` · ${pr.nombre_razon_social}`;
+  }
   const res = db.prepare(
-    `INSERT INTO mantenimiento (unidad_id, tipo, descripcion, costo, fecha_inicio, fecha_fin, estado) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO mantenimiento (unidad_id, proveedor_id, tipo, descripcion, costo, fecha_inicio, fecha_fin, estado)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     Number(unidadId),
+    proveedorIdDb,
     TIPOS_MANTENIMIENTO.includes(tipo) ? tipo : 'preventivo',
     String(descripcion || '').trim(),
     Number(costo) || 0,
@@ -802,7 +914,7 @@ export function createMantenimiento(data, usuarioId = null) {
   registrarSistemaActividad({
     categoria: 'mantenimiento',
     accion: 'Mantenimiento creado',
-    detalle: `${tipo || 'preventivo'} · ${u.placas} · ${String(descripcion || '').slice(0, 80)}`,
+    detalle: `${tipo || 'preventivo'} · ${u.placas}${provLabel} · ${String(descripcion || '').slice(0, 80)}`,
     entidadTipo: 'mantenimiento',
     entidadId: String(id),
     usuarioId,
@@ -813,23 +925,14 @@ export function createMantenimiento(data, usuarioId = null) {
 
 function getMantenimientoById(id) {
   const m = db.prepare(
-    `SELECT m.*, u.placas, u.marca, u.modelo FROM mantenimiento m JOIN unidades u ON u.id = m.unidad_id WHERE m.id = ?`
+    `SELECT m.*, u.placas, u.marca, u.modelo, p.nombre_razon_social AS proveedor_nombre
+     FROM mantenimiento m
+     JOIN unidades u ON u.id = m.unidad_id
+     LEFT JOIN proveedores p ON p.id = m.proveedor_id
+     WHERE m.id = ?`
   ).get(Number(id));
   if (!m) return null;
-  return {
-    id: String(m.id),
-    unidadId: String(m.unidad_id),
-    placas: m.placas,
-    marca: m.marca,
-    modelo: m.modelo,
-    tipo: m.tipo,
-    descripcion: m.descripcion || '',
-    costo: m.costo || 0,
-    fechaInicio: m.fecha_inicio,
-    fechaFin: m.fecha_fin || null,
-    estado: m.estado,
-    creadoEn: m.creado_en,
-  };
+  return mapMantenimientoRow(m);
 }
 
 export function updateMantenimiento(id, data, usuarioId = null) {
@@ -844,6 +947,20 @@ export function updateMantenimiento(id, data, usuarioId = null) {
   if (costo != null) { updates.push('costo = ?'); values.push(Number(costo) || 0); campos.push('costo'); }
   if (fechaInicio != null) { updates.push('fecha_inicio = ?'); values.push(fechaInicio); campos.push('inicio'); }
   if (fechaFin != null) { updates.push('fecha_fin = ?'); values.push(fechaFin === '' ? null : fechaFin); campos.push('fin'); }
+  if ('proveedorId' in data) {
+    if (data.proveedorId == null || data.proveedorId === '') {
+      updates.push('proveedor_id = NULL');
+      campos.push('proveedor (sin vínculo)');
+    } else {
+      const pid = Number(data.proveedorId);
+      if (!Number.isFinite(pid)) return null;
+      const pr = db.prepare('SELECT id FROM proveedores WHERE id = ? AND activo = 1').get(pid);
+      if (!pr) return null;
+      updates.push('proveedor_id = ?');
+      values.push(pid);
+      campos.push('proveedor');
+    }
+  }
   if (estado != null && ESTADOS_MANTENIMIENTO.includes(estado)) {
     updates.push('estado = ?');
     values.push(estado);
@@ -896,9 +1013,13 @@ export function getRentasPorMes(ano, mes) {
 }
 
 export function getUsuarioByEmail(email) {
+  const e = String(email ?? '')
+    .trim()
+    .toLowerCase();
+  if (!e) return undefined;
   return db.prepare(
-    'SELECT id, email, password_hash, nombre, avatar, rol, activo FROM usuarios WHERE email = ?'
-  ).get(email);
+    'SELECT id, email, password_hash, nombre, avatar, rol, activo FROM usuarios WHERE lower(trim(email)) = ?'
+  ).get(e);
 }
 
 export function getUsuarioById(id) {
@@ -1043,7 +1164,9 @@ export function existeUsuarioPorEmail(email, excludeId = null) {
 }
 
 /* ─── Unidades ─── */
-const ESTADOS_UNIDAD = ['Disponible', 'En Renta', 'Taller'];
+const ESTADOS_UNIDAD = ['Disponible', 'En Renta'];
+const SUBESTADOS_DISPONIBLE = ['disponible', 'taller', 'almacen_exclusivo', 'pendiente_placas'];
+const UBICACIONES_DISPONIBLE = ['lote', 'patio'];
 
 export function initUnidades() {
   db.exec(`
@@ -1053,6 +1176,9 @@ export function initUnidades() {
       marca TEXT NOT NULL,
       modelo TEXT NOT NULL,
       estatus TEXT NOT NULL DEFAULT 'Disponible',
+      numero_serie_caja TEXT DEFAULT '',
+      subestatus_disponible TEXT NOT NULL DEFAULT 'disponible',
+      ubicacion_disponible TEXT NOT NULL DEFAULT 'lote',
       kilometraje INTEGER NOT NULL DEFAULT 0,
       combustible_pct INTEGER NOT NULL DEFAULT 0,
       observaciones TEXT DEFAULT '',
@@ -1065,6 +1191,7 @@ export function initUnidades() {
       unidad_id INTEGER NOT NULL,
       tipo TEXT NOT NULL,
       nombre TEXT NOT NULL,
+      ruta TEXT DEFAULT '',
       fecha_subida TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (unidad_id) REFERENCES unidades(id) ON DELETE CASCADE
     );
@@ -1098,7 +1225,7 @@ export function initUnidades() {
     );
     ins.run('ABC-12-34', 'Toyota', 'Hilux', 'Disponible', 48210, 74, 'Sin pendientes críticos.');
     ins.run('DEF-56-78', 'Ford', 'Ranger', 'En Renta', 52940, 41, 'Revisar kit herramientas antes de check-out.');
-    ins.run('GHI-90-12', 'Chevrolet', 'Colorado', 'Taller', 61205, 12, 'En proceso: cambio de aceite y revisión general.');
+    ins.run('GHI-90-12', 'Chevrolet', 'Colorado', 'Disponible', 61205, 12, 'En proceso: cambio de aceite y revisión general.');
     ins.run('JKL-34-56', 'Nissan', 'NP300', 'Disponible', 39110, 88, 'Listo para salir.');
     const insDoc = db.prepare(
       'INSERT INTO unidad_documentos (unidad_id, tipo, nombre) VALUES (?, ?, ?)'
@@ -1121,14 +1248,22 @@ export function initUnidades() {
 
 export function getAllUnidades() {
   const rows = db.prepare(
-    `SELECT id, placas, marca, modelo, estatus, kilometraje, combustible_pct, observaciones, creado_en,
+    `SELECT id, placas, marca, modelo, estatus, numero_serie_caja, subestatus_disponible, ubicacion_disponible,
+            kilometraje, combustible_pct, observaciones, creado_en,
             COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad,
             COALESCE(estado_mantenimiento, 'disponible') as estado_mantenimiento,
-            COALESCE(horas_motor, 0) as horas_motor
+            COALESCE(horas_motor, 0) as horas_motor,
+            (
+              SELECT r.cliente_nombre
+              FROM rentas r
+              WHERE r.unidad_id = unidades.id AND r.estado IN ('reservada', 'activa')
+              ORDER BY CASE r.estado WHEN 'activa' THEN 0 ELSE 1 END, r.fecha_inicio DESC
+              LIMIT 1
+            ) AS cliente_en_renta
      FROM unidades WHERE activo = 1 ORDER BY placas`
   ).all();
   const docs = db.prepare(
-    'SELECT id, unidad_id, tipo, nombre, fecha_subida FROM unidad_documentos ORDER BY fecha_subida DESC'
+    'SELECT id, unidad_id, tipo, nombre, ruta, fecha_subida FROM unidad_documentos ORDER BY fecha_subida DESC'
   ).all();
   const acts = db.prepare(
     'SELECT id, unidad_id, accion, detalle, fecha, icon FROM unidad_actividad ORDER BY fecha DESC'
@@ -1142,6 +1277,10 @@ export function getAllUnidades() {
     marca: u.marca,
     modelo: u.modelo,
     estatus: u.estatus,
+    numeroSerieCaja: String(u.numero_serie_caja || '').trim(),
+    subestatusDisponible: u.subestatus_disponible || 'disponible',
+    ubicacionDisponible: u.ubicacion_disponible || 'lote',
+    clienteEnRenta: u.cliente_en_renta || '',
     kilometraje: u.kilometraje,
     combustiblePct: u.combustible_pct,
     observaciones: u.observaciones || '',
@@ -1152,6 +1291,7 @@ export function getAllUnidades() {
       id: String(d.id),
       nombre: d.nombre,
       tipo: d.tipo,
+      ruta: d.ruta || '',
       fechaSubida: d.fecha_subida,
     })),
     actividad: acts.filter(a => a.unidad_id === u.id).map(a => ({
@@ -1173,14 +1313,22 @@ export function getAllUnidades() {
 
 export function getUnidadById(id) {
   const u = db.prepare(
-    `SELECT id, placas, marca, modelo, estatus, kilometraje, combustible_pct, observaciones,
+    `SELECT id, placas, marca, modelo, estatus, numero_serie_caja, subestatus_disponible, ubicacion_disponible,
+            kilometraje, combustible_pct, observaciones,
             COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad,
             COALESCE(estado_mantenimiento, 'disponible') as estado_mantenimiento,
-            COALESCE(horas_motor, 0) as horas_motor
+            COALESCE(horas_motor, 0) as horas_motor,
+            (
+              SELECT r.cliente_nombre
+              FROM rentas r
+              WHERE r.unidad_id = unidades.id AND r.estado IN ('reservada', 'activa')
+              ORDER BY CASE r.estado WHEN 'activa' THEN 0 ELSE 1 END, r.fecha_inicio DESC
+              LIMIT 1
+            ) AS cliente_en_renta
      FROM unidades WHERE id = ? AND activo = 1`
   ).get(Number(id));
   if (!u) return null;
-  const docs = db.prepare('SELECT id, tipo, nombre, fecha_subida FROM unidad_documentos WHERE unidad_id = ? ORDER BY fecha_subida DESC').all(u.id);
+  const docs = db.prepare('SELECT id, tipo, nombre, ruta, fecha_subida FROM unidad_documentos WHERE unidad_id = ? ORDER BY fecha_subida DESC').all(u.id);
   const acts = db.prepare('SELECT id, accion, detalle, fecha, icon FROM unidad_actividad WHERE unidad_id = ? ORDER BY fecha DESC').all(u.id);
   const imgs = db.prepare('SELECT id, nombre_archivo, ruta, descripcion, fecha_subida FROM unidad_imagenes WHERE unidad_id = ? ORDER BY fecha_subida DESC').all(u.id);
   return {
@@ -1189,13 +1337,17 @@ export function getUnidadById(id) {
     marca: u.marca,
     modelo: u.modelo,
     estatus: u.estatus,
+    numeroSerieCaja: String(u.numero_serie_caja || '').trim(),
+    subestatusDisponible: u.subestatus_disponible || 'disponible',
+    ubicacionDisponible: u.ubicacion_disponible || 'lote',
+    clienteEnRenta: u.cliente_en_renta || '',
     kilometraje: u.kilometraje,
     combustiblePct: u.combustible_pct,
     observaciones: u.observaciones || '',
     tipoUnidad: u.tipo_unidad || 'remolque_seco',
     estadoMantenimiento: u.estado_mantenimiento || 'disponible',
     horasMotor: u.horas_motor || 0,
-    documentos: docs.map(d => ({ id: String(d.id), nombre: d.nombre, tipo: d.tipo, fechaSubida: d.fecha_subida })),
+    documentos: docs.map(d => ({ id: String(d.id), nombre: d.nombre, tipo: d.tipo, ruta: d.ruta || '', fechaSubida: d.fecha_subida })),
     actividad: acts.map(a => ({ id: String(a.id), accion: a.accion, detalle: a.detalle, fecha: a.fecha, icon: a.icon || 'mdi:information' })),
     imagenes: imgs.map(i => ({
       id: String(i.id),
@@ -1263,19 +1415,38 @@ function logUnidadActividadRow(unidadId, accion, detalle, icon, usuarioId = null
 }
 
 export function createUnidad(data, usuarioId = null) {
-  const { placas, marca, modelo, estatus = 'Disponible', kilometraje = 0, combustiblePct = 0, observaciones = '', tipoUnidad = 'remolque_seco', horasMotor = 0 } = data;
+  const {
+    placas,
+    marca,
+    modelo,
+    estatus = 'Disponible',
+    numeroSerieCaja = '',
+    subestatusDisponible = 'disponible',
+    ubicacionDisponible = 'lote',
+    kilometraje = 0,
+    combustiblePct = 0,
+    observaciones = '',
+    tipoUnidad = 'remolque_seco',
+    horasMotor = 0,
+  } = data;
   if (!placas || !marca || !modelo) return null;
+  if (!String(numeroSerieCaja || '').trim()) return null;
   if (existePlacas(placas)) return null;
   if (!ESTADOS_UNIDAD.includes(estatus)) return null;
+  const subestatus = SUBESTADOS_DISPONIBLE.includes(subestatusDisponible) ? subestatusDisponible : 'disponible';
+  const ubicacion = UBICACIONES_DISPONIBLE.includes(ubicacionDisponible) ? ubicacionDisponible : 'lote';
   const tipo = TIPOS_UNIDAD.includes(tipoUnidad) ? tipoUnidad : 'remolque_seco';
   const run = db.prepare(
-    'INSERT INTO unidades (placas, marca, modelo, estatus, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO unidades (placas, marca, modelo, estatus, numero_serie_caja, subestatus_disponible, ubicacion_disponible, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const r = run.run(
     String(placas).trim(),
     String(marca).trim(),
     String(modelo).trim(),
     estatus,
+    String(numeroSerieCaja || '').trim(),
+    subestatus,
+    ubicacion,
     Number(kilometraje) || 0,
     Math.max(0, Math.min(100, Number(combustiblePct) || 0)),
     String(observaciones || '').trim(),
@@ -1298,11 +1469,20 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (!u) return null;
   const updates = [];
   const values = [];
-  const { placas, marca, modelo, estatus, kilometraje, combustiblePct, observaciones, tipoUnidad, estadoMantenimiento, horasMotor } = data;
+  const {
+    placas, marca, modelo, estatus, numeroSerieCaja, subestatusDisponible, ubicacionDisponible,
+    kilometraje, combustiblePct, observaciones, tipoUnidad, estadoMantenimiento, horasMotor
+  } = data;
   if (placas != null) { updates.push('placas = ?'); values.push(String(placas).trim()); }
   if (marca != null) { updates.push('marca = ?'); values.push(String(marca).trim()); }
   if (modelo != null) { updates.push('modelo = ?'); values.push(String(modelo).trim()); }
   if (estatus != null && ESTADOS_UNIDAD.includes(estatus)) { updates.push('estatus = ?'); values.push(estatus); }
+  if (numeroSerieCaja != null && String(numeroSerieCaja).trim()) {
+    updates.push('numero_serie_caja = ?');
+    values.push(String(numeroSerieCaja).trim());
+  }
+  if (subestatusDisponible != null && SUBESTADOS_DISPONIBLE.includes(subestatusDisponible)) { updates.push('subestatus_disponible = ?'); values.push(subestatusDisponible); }
+  if (ubicacionDisponible != null && UBICACIONES_DISPONIBLE.includes(ubicacionDisponible)) { updates.push('ubicacion_disponible = ?'); values.push(ubicacionDisponible); }
   if (kilometraje != null) { updates.push('kilometraje = ?'); values.push(Number(kilometraje) || 0); }
   if (combustiblePct != null) { updates.push('combustible_pct = ?'); values.push(Math.max(0, Math.min(100, Number(combustiblePct) || 0))); }
   if (observaciones != null) { updates.push('observaciones = ?'); values.push(String(observaciones || '')); }
@@ -1318,6 +1498,9 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (marca != null) campos.push('marca');
   if (modelo != null) campos.push('modelo');
   if (estatus != null) campos.push('estatus');
+  if (numeroSerieCaja != null) campos.push('numero_serie_caja');
+  if (subestatusDisponible != null) campos.push('subestatus_disponible');
+  if (ubicacionDisponible != null) campos.push('ubicacion_disponible');
   if (kilometraje != null) campos.push('kilometraje');
   if (combustiblePct != null) campos.push('combustible');
   if (observaciones != null) campos.push('observaciones');
@@ -1340,17 +1523,39 @@ export function setEstatusUnidad(id, nextEstatus, usuarioId = null) {
   const u = db.prepare('SELECT id, estatus FROM unidades WHERE id = ? AND activo = 1').get(Number(id));
   if (!u || !ESTADOS_UNIDAD.includes(nextEstatus)) return null;
   db.prepare("UPDATE unidades SET estatus = ?, actualizado_en = datetime('now') WHERE id = ?").run(nextEstatus, id);
-  const icon = nextEstatus === 'Taller' ? 'mdi:wrench' : nextEstatus === 'En Renta' ? 'mdi:key-chain' : 'mdi:car';
+  const icon = nextEstatus === 'En Renta' ? 'mdi:key-chain' : 'mdi:car';
   logUnidadActividadRow(id, 'Estatus actualizado', `Cambio de ${u.estatus} a ${nextEstatus}.`, icon, usuarioId);
   return getUnidadById(id);
 }
 
-export function addUnidadDocumento(unidadId, tipo, nombre, usuarioId = null) {
+export function addUnidadDocumento(unidadId, tipo, nombre, ruta = '', usuarioId = null) {
   const u = db.prepare('SELECT id FROM unidades WHERE id = ? AND activo = 1').get(Number(unidadId));
   if (!u) return null;
-  db.prepare('INSERT INTO unidad_documentos (unidad_id, tipo, nombre) VALUES (?, ?, ?)').run(unidadId, tipo, nombre);
+  db.prepare('INSERT INTO unidad_documentos (unidad_id, tipo, nombre, ruta) VALUES (?, ?, ?, ?)')
+    .run(unidadId, tipo, nombre, String(ruta || '').trim());
   logUnidadActividadRow(unidadId, 'Documento agregado', `${tipo}: ${nombre}`, 'mdi:file-document', usuarioId);
   return getUnidadById(unidadId);
+}
+
+export function deleteUnidadDocumento(id, usuarioId = null) {
+  const row = db.prepare(
+    `SELECT d.id, d.unidad_id, d.nombre, d.ruta, u.placas
+     FROM unidad_documentos d
+     JOIN unidades u ON u.id = d.unidad_id
+     WHERE d.id = ?`
+  ).get(Number(id));
+  if (!row) return null;
+  db.prepare('DELETE FROM unidad_documentos WHERE id = ?').run(Number(id));
+  registrarSistemaActividad({
+    categoria: 'unidad',
+    accion: 'Documento eliminado',
+    detalle: `${row.nombre} · ${row.placas}`,
+    entidadTipo: 'unidad',
+    entidadId: String(row.unidad_id),
+    usuarioId,
+    icon: 'mdi:file-remove',
+  });
+  return { unidadId: row.unidad_id, ruta: row.ruta || '' };
 }
 
 export function addUnidadActividad(unidadId, accion, detalle, icon = 'mdi:information', usuarioId = null) {
@@ -1404,6 +1609,8 @@ export function createCheckinOutRegistro(data, usuarioId = null) {
     combustiblePct,
     checklist,
     observaciones,
+    modalidad,
+    inspeccion,
   } = data;
   if (!tipo || !['checkin', 'checkout'].includes(String(tipo))) return null;
   const u = db.prepare('SELECT id, placas FROM unidades WHERE id = ? AND activo = 1').get(Number(unidadId));
@@ -1415,10 +1622,18 @@ export function createCheckinOutRegistro(data, usuarioId = null) {
     rId = r.id;
   }
   const checklistJson = JSON.stringify(Array.isArray(checklist) ? checklist : []);
+  const modalidadesOk = ['caja_seca', 'refrigerado', 'mulita_patio'];
+  const modalidadVal = modalidadesOk.includes(String(modalidad)) ? String(modalidad) : 'caja_seca';
+  let inspeccionJson = '{}';
+  try {
+    inspeccionJson = JSON.stringify(inspeccion && typeof inspeccion === 'object' ? inspeccion : {});
+  } catch {
+    inspeccionJson = '{}';
+  }
   const ins = db.prepare(
     `INSERT INTO checkin_out_registros (tipo, unidad_id, renta_id, usuario_id, colaborador_nombre, colaborador_rol,
-      kilometraje, combustible_pct, checklist_json, observaciones)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      kilometraje, combustible_pct, checklist_json, observaciones, modalidad, inspeccion_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     String(tipo),
     Number(unidadId),
@@ -1429,7 +1644,9 @@ export function createCheckinOutRegistro(data, usuarioId = null) {
     kilometraje != null && kilometraje !== '' ? Number(kilometraje) : null,
     combustiblePct != null && combustiblePct !== '' ? Math.max(0, Math.min(100, Number(combustiblePct))) : null,
     checklistJson,
-    String(observaciones || '').trim()
+    String(observaciones || '').trim(),
+    modalidadVal,
+    inspeccionJson
   );
   const newId = ins.lastInsertRowid;
   if ((kilometraje != null && kilometraje !== '') || (combustiblePct != null && combustiblePct !== '')) {
@@ -1458,6 +1675,7 @@ export function createCheckinOutRegistro(data, usuarioId = null) {
   }
   const accion = tipo === 'checkin' ? 'Check-in registrado' : 'Check-out registrado';
   const detalleParts = [
+    modalidadVal !== 'caja_seca' && `Modalidad: ${modalidadVal}`,
     colaboradorNombre && `Con ${String(colaboradorNombre).trim()}${colaboradorRol ? ` (${colaboradorRol})` : ''}`,
     listSummary,
     observaciones && String(observaciones).trim().slice(0, 100),
@@ -1476,7 +1694,28 @@ export function createCheckinOutRegistro(data, usuarioId = null) {
   return getCheckinOutRegistroById(newId);
 }
 
-function getCheckinOutRegistroById(id) {
+function mapCheckinOutImagenRow(r) {
+  return {
+    id: String(r.id),
+    nombreArchivo: r.nombre_archivo,
+    ruta: r.ruta,
+    descripcion: r.descripcion || '',
+    creadoEn: r.creado_en,
+  };
+}
+
+function buildCheckinOutImagenesMap() {
+  const rows = db.prepare('SELECT * FROM checkin_out_imagenes ORDER BY id ASC').all();
+  const m = new Map();
+  for (const r of rows) {
+    const rid = String(r.registro_id);
+    if (!m.has(rid)) m.set(rid, []);
+    m.get(rid).push(mapCheckinOutImagenRow(r));
+  }
+  return m;
+}
+
+export function getCheckinOutRegistroById(id) {
   const row = db.prepare(
     `SELECT c.*, u.placas, u.marca, u.modelo, ua.nombre AS usuario_nombre,
             r.cliente_nombre AS renta_cliente
@@ -1487,15 +1726,24 @@ function getCheckinOutRegistroById(id) {
      WHERE c.id = ?`
   ).get(Number(id));
   if (!row) return null;
-  return mapCheckinOutRow(row);
+  const imgs = db
+    .prepare('SELECT * FROM checkin_out_imagenes WHERE registro_id = ? ORDER BY id ASC')
+    .all(Number(id));
+  return mapCheckinOutRow(row, imgs.map(mapCheckinOutImagenRow));
 }
 
-function mapCheckinOutRow(row) {
+function mapCheckinOutRow(row, imagenes = []) {
   let checklist = [];
   try {
     checklist = JSON.parse(row.checklist_json || '[]');
   } catch {
     checklist = [];
+  }
+  let inspeccion = {};
+  try {
+    inspeccion = JSON.parse(row.inspeccion_json || '{}');
+  } catch {
+    inspeccion = {};
   }
   return {
     id: String(row.id),
@@ -1514,6 +1762,9 @@ function mapCheckinOutRow(row) {
     combustiblePct: row.combustible_pct,
     checklist,
     observaciones: row.observaciones || '',
+    modalidad: row.modalidad || 'caja_seca',
+    inspeccion,
+    imagenes,
     creadoEn: row.creado_en,
   };
 }
@@ -1530,7 +1781,8 @@ export function getCheckinOutRegistros(limit = 80) {
      ORDER BY c.creado_en DESC
      LIMIT ?`
   ).all(max);
-  return rows.map(mapCheckinOutRow);
+  const imgMap = buildCheckinOutImagenesMap();
+  return rows.map((row) => mapCheckinOutRow(row, imgMap.get(String(row.id)) || []));
 }
 
 export function updateCheckinOutRegistro(registroId, data, usuarioId = null) {
@@ -1548,6 +1800,8 @@ export function updateCheckinOutRegistro(registroId, data, usuarioId = null) {
     combustiblePct,
     checklist,
     observaciones,
+    modalidad,
+    inspeccion,
   } = data;
   if (!tipo || !['checkin', 'checkout'].includes(String(tipo))) return null;
   const u = db.prepare('SELECT placas FROM unidades WHERE id = ? AND activo = 1').get(Number(unidadId));
@@ -1561,6 +1815,14 @@ export function updateCheckinOutRegistro(registroId, data, usuarioId = null) {
   }
 
   const checklistJson = JSON.stringify(Array.isArray(checklist) ? checklist : []);
+  const modalidadesOk = ['caja_seca', 'refrigerado', 'mulita_patio'];
+  const modalidadVal = modalidadesOk.includes(String(modalidad)) ? String(modalidad) : 'caja_seca';
+  let inspeccionJson = '{}';
+  try {
+    inspeccionJson = JSON.stringify(inspeccion && typeof inspeccion === 'object' ? inspeccion : {});
+  } catch {
+    inspeccionJson = '{}';
+  }
   const km =
     kilometraje != null && kilometraje !== '' ? Number(kilometraje) : null;
   const fuel =
@@ -1570,7 +1832,7 @@ export function updateCheckinOutRegistro(registroId, data, usuarioId = null) {
 
   db.prepare(
     `UPDATE checkin_out_registros SET tipo=?, unidad_id=?, renta_id=?, colaborador_nombre=?, colaborador_rol=?,
-     kilometraje=?, combustible_pct=?, checklist_json=?, observaciones=? WHERE id=?`
+     kilometraje=?, combustible_pct=?, checklist_json=?, observaciones=?, modalidad=?, inspeccion_json=? WHERE id=?`
   ).run(
     String(tipo),
     Number(unidadId),
@@ -1581,6 +1843,8 @@ export function updateCheckinOutRegistro(registroId, data, usuarioId = null) {
     fuel,
     checklistJson,
     String(observaciones || '').trim(),
+    modalidadVal,
+    inspeccionJson,
     id
   );
 
@@ -1627,6 +1891,332 @@ export function deleteCheckinOutRegistro(registroId, usuarioId = null) {
     usuarioId
   );
   return true;
+}
+
+export function addCheckinOutImagen(registroId, nombreArchivo, ruta, descripcion = '', usuarioId = null) {
+  const ex = db.prepare('SELECT id FROM checkin_out_registros WHERE id = ?').get(Number(registroId));
+  if (!ex) return null;
+  db.prepare(
+    'INSERT INTO checkin_out_imagenes (registro_id, nombre_archivo, ruta, descripcion) VALUES (?,?,?,?)'
+  ).run(Number(registroId), String(nombreArchivo || ''), String(ruta || ''), String(descripcion || ''));
+  const urow = db.prepare('SELECT unidad_id FROM checkin_out_registros WHERE id = ?').get(Number(registroId));
+  if (urow) {
+    logUnidadActividadRow(
+      urow.unidad_id,
+      'Evidencia check-in/out',
+      String(nombreArchivo || 'foto'),
+      'mdi:camera',
+      usuarioId
+    );
+  }
+  return getCheckinOutRegistroById(Number(registroId));
+}
+
+export function deleteCheckinOutImagen(imgId, usuarioId = null) {
+  const row = db
+    .prepare(
+      `SELECT i.id, i.registro_id, i.ruta, i.nombre_archivo, c.unidad_id
+       FROM checkin_out_imagenes i
+       JOIN checkin_out_registros c ON c.id = i.registro_id
+       WHERE i.id = ?`
+    )
+    .get(Number(imgId));
+  if (!row) return null;
+  db.prepare('DELETE FROM checkin_out_imagenes WHERE id = ?').run(Number(imgId));
+  logUnidadActividadRow(
+    row.unidad_id,
+    'Evidencia check-in/out eliminada',
+    String(row.nombre_archivo || ''),
+    'mdi:camera-off',
+    usuarioId
+  );
+  return { registroId: String(row.registro_id), ruta: row.ruta };
+}
+
+/* ─── Clientes (expediente / acta) y vínculo con rentas ─── */
+
+const TIPOS_CLIENTE = ['persona_fisica', 'persona_moral'];
+
+function initClientes() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS clientes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tipo TEXT NOT NULL DEFAULT 'persona_moral',
+      nombre_comercial TEXT NOT NULL DEFAULT '',
+      razon_social TEXT DEFAULT '',
+      rfc TEXT DEFAULT '',
+      curp TEXT DEFAULT '',
+      representante_legal TEXT DEFAULT '',
+      telefono TEXT DEFAULT '',
+      email TEXT DEFAULT '',
+      direccion TEXT DEFAULT '',
+      notas TEXT DEFAULT '',
+      activo INTEGER NOT NULL DEFAULT 1,
+      creado_en TEXT DEFAULT (datetime('now')),
+      actualizado_en TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cliente_documentos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cliente_id INTEGER NOT NULL,
+      tipo TEXT NOT NULL DEFAULT 'otro',
+      nombre TEXT NOT NULL,
+      ruta TEXT NOT NULL,
+      creado_en TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_cliente_docs_cliente ON cliente_documentos(cliente_id);
+    CREATE INDEX IF NOT EXISTS idx_clientes_activo_nombre ON clientes(activo, nombre_comercial);
+  `);
+  try {
+    const cols = db.prepare("PRAGMA table_info(rentas)").all().map((r) => r.name);
+    if (!cols.includes('cliente_id')) {
+      db.exec('ALTER TABLE rentas ADD COLUMN cliente_id INTEGER REFERENCES clientes(id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_rentas_cliente ON rentas(cliente_id)');
+    }
+  } catch (e) {
+    console.warn('Migración rentas.cliente_id:', e?.message);
+  }
+}
+
+function mapClienteRow(c) {
+  return {
+    id: String(c.id),
+    tipo: TIPOS_CLIENTE.includes(c.tipo) ? c.tipo : 'persona_moral',
+    nombreComercial: c.nombre_comercial || '',
+    razonSocial: c.razon_social || '',
+    rfc: c.rfc || '',
+    curp: c.curp || '',
+    representanteLegal: c.representante_legal || '',
+    telefono: c.telefono || '',
+    email: c.email || '',
+    direccion: c.direccion || '',
+    notas: c.notas || '',
+    creadoEn: c.creado_en,
+    actualizadoEn: c.actualizado_en,
+    docCount: c.doc_count != null ? Number(c.doc_count) : undefined,
+    rentasVinculadas: c.rentas_vinculadas != null ? Number(c.rentas_vinculadas) : undefined,
+  };
+}
+
+export function getAllClientes() {
+  const rows = db
+    .prepare(
+      `SELECT c.*,
+        (SELECT COUNT(*) FROM cliente_documentos d WHERE d.cliente_id = c.id) AS doc_count,
+        (SELECT COUNT(*) FROM rentas r WHERE r.cliente_id = c.id) AS rentas_vinculadas
+       FROM clientes c
+       WHERE c.activo = 1
+       ORDER BY c.nombre_comercial COLLATE NOCASE, c.razon_social COLLATE NOCASE`
+    )
+    .all();
+  return rows.map((c) => mapClienteRow(c));
+}
+
+export function getClienteById(id) {
+  const c = db.prepare('SELECT * FROM clientes WHERE id = ? AND activo = 1').get(Number(id));
+  if (!c) return null;
+  const docs = db
+    .prepare('SELECT * FROM cliente_documentos WHERE cliente_id = ? ORDER BY creado_en DESC')
+    .all(c.id);
+  const rentas = db
+    .prepare(
+      `SELECT r.id, r.fecha_inicio, r.fecha_fin, r.estado, u.placas
+       FROM rentas r
+       JOIN unidades u ON u.id = r.unidad_id
+       WHERE r.cliente_id = ?
+       ORDER BY r.fecha_inicio DESC`
+    )
+    .all(c.id);
+  const base = mapClienteRow({ ...c, doc_count: docs.length, rentas_vinculadas: rentas.length });
+  return {
+    ...base,
+    documentos: docs.map((d) => ({
+      id: String(d.id),
+      tipo: d.tipo,
+      nombre: d.nombre,
+      ruta: d.ruta,
+      creadoEn: d.creado_en,
+    })),
+    rentas: rentas.map((r) => ({
+      id: String(r.id),
+      fechaInicio: r.fecha_inicio,
+      fechaFin: r.fecha_fin,
+      estado: r.estado,
+      placas: r.placas,
+    })),
+  };
+}
+
+export function createCliente(data, usuarioId = null) {
+  const {
+    tipo = 'persona_moral',
+    nombreComercial,
+    razonSocial = '',
+    rfc = '',
+    curp = '',
+    representanteLegal = '',
+    telefono = '',
+    email = '',
+    direccion = '',
+    notas = '',
+  } = data;
+  const nc = String(nombreComercial || '').trim();
+  if (!nc) return null;
+  const t = TIPOS_CLIENTE.includes(tipo) ? tipo : 'persona_moral';
+  const r = db
+    .prepare(
+      `INSERT INTO clientes (tipo, nombre_comercial, razon_social, rfc, curp, representante_legal, telefono, email, direccion, notas)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      t,
+      nc,
+      String(razonSocial || '').trim(),
+      String(rfc || '').trim(),
+      String(curp || '').trim(),
+      String(representanteLegal || '').trim(),
+      String(telefono || '').trim(),
+      String(email || '').trim(),
+      String(direccion || '').trim(),
+      String(notas || '').trim()
+    );
+  registrarSistemaActividad({
+    categoria: 'cliente',
+    accion: 'Cliente registrado',
+    detalle: nc,
+    entidadTipo: 'cliente',
+    entidadId: String(r.lastInsertRowid),
+    usuarioId,
+    icon: 'mdi:account-plus',
+  });
+  return getClienteById(r.lastInsertRowid);
+}
+
+export function updateCliente(id, data, usuarioId = null) {
+  const ex = db.prepare('SELECT id FROM clientes WHERE id = ? AND activo = 1').get(Number(id));
+  if (!ex) return null;
+  const updates = [];
+  const values = [];
+  const {
+    tipo,
+    nombreComercial,
+    razonSocial,
+    rfc,
+    curp,
+    representanteLegal,
+    telefono,
+    email,
+    direccion,
+    notas,
+  } = data;
+  if (tipo != null && TIPOS_CLIENTE.includes(tipo)) {
+    updates.push('tipo = ?');
+    values.push(tipo);
+  }
+  if (nombreComercial != null) {
+    updates.push('nombre_comercial = ?');
+    values.push(String(nombreComercial).trim());
+  }
+  if (razonSocial != null) {
+    updates.push('razon_social = ?');
+    values.push(String(razonSocial || '').trim());
+  }
+  if (rfc != null) {
+    updates.push('rfc = ?');
+    values.push(String(rfc || '').trim());
+  }
+  if (curp != null) {
+    updates.push('curp = ?');
+    values.push(String(curp || '').trim());
+  }
+  if (representanteLegal != null) {
+    updates.push('representante_legal = ?');
+    values.push(String(representanteLegal || '').trim());
+  }
+  if (telefono != null) {
+    updates.push('telefono = ?');
+    values.push(String(telefono || '').trim());
+  }
+  if (email != null) {
+    updates.push('email = ?');
+    values.push(String(email || '').trim());
+  }
+  if (direccion != null) {
+    updates.push('direccion = ?');
+    values.push(String(direccion || '').trim());
+  }
+  if (notas != null) {
+    updates.push('notas = ?');
+    values.push(String(notas || '').trim());
+  }
+  if (updates.length === 0) return getClienteById(id);
+  updates.push("actualizado_en = datetime('now')");
+  values.push(Number(id));
+  db.prepare(`UPDATE clientes SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+  registrarSistemaActividad({
+    categoria: 'cliente',
+    accion: 'Cliente actualizado',
+    detalle: `ID ${id}`,
+    entidadTipo: 'cliente',
+    entidadId: String(id),
+    usuarioId,
+    icon: 'mdi:account-edit',
+  });
+  return getClienteById(id);
+}
+
+export function deleteClienteSoft(id, usuarioId = null) {
+  const c = db.prepare('SELECT nombre_comercial FROM clientes WHERE id = ? AND activo = 1').get(Number(id));
+  if (!c) return false;
+  db.prepare("UPDATE clientes SET activo = 0, actualizado_en = datetime('now') WHERE id = ?").run(Number(id));
+  registrarSistemaActividad({
+    categoria: 'cliente',
+    accion: 'Cliente desactivado',
+    detalle: c.nombre_comercial || String(id),
+    entidadTipo: 'cliente',
+    entidadId: String(id),
+    usuarioId,
+    icon: 'mdi:account-off',
+  });
+  return true;
+}
+
+export function addClienteDocumento(clienteId, tipo, nombre, ruta, usuarioId = null) {
+  const ex = db.prepare('SELECT id FROM clientes WHERE id = ? AND activo = 1').get(Number(clienteId));
+  if (!ex) return null;
+  db.prepare(
+    'INSERT INTO cliente_documentos (cliente_id, tipo, nombre, ruta) VALUES (?,?,?,?)'
+  ).run(Number(clienteId), String(tipo || 'otro').trim(), String(nombre || '').trim(), String(ruta || '').trim());
+  registrarSistemaActividad({
+    categoria: 'cliente',
+    accion: 'Documento de cliente',
+    detalle: `${nombre} (${tipo})`,
+    entidadTipo: 'cliente',
+    entidadId: String(clienteId),
+    usuarioId,
+    icon: 'mdi:file-upload',
+  });
+  return getClienteById(clienteId);
+}
+
+export function deleteClienteDocumento(docId, usuarioId = null) {
+  const row = db
+    .prepare(
+      `SELECT d.id, d.cliente_id, d.nombre, d.ruta FROM cliente_documentos d WHERE d.id = ?`
+    )
+    .get(Number(docId));
+  if (!row) return null;
+  db.prepare('DELETE FROM cliente_documentos WHERE id = ?').run(Number(docId));
+  registrarSistemaActividad({
+    categoria: 'cliente',
+    accion: 'Documento eliminado',
+    detalle: row.nombre || '',
+    entidadTipo: 'cliente',
+    entidadId: String(row.cliente_id),
+    usuarioId,
+    icon: 'mdi:file-remove',
+  });
+  return { clienteId: String(row.cliente_id), ruta: row.ruta };
 }
 
 /* ─── Proveedores, facturas y pagos (cuentas por pagar) ─── */
@@ -1689,6 +2279,7 @@ function totalPagadoFactura(facturaId) {
 function mapProveedorRow(p, extra = {}) {
   const tf = Number(extra.total_facturado ?? 0);
   const tp = Number(extra.total_pagado ?? 0);
+  const tm = Number(extra.total_mantenimiento ?? 0);
   return {
     id: String(p.id),
     nombreRazonSocial: p.nombre_razon_social,
@@ -1704,6 +2295,7 @@ function mapProveedorRow(p, extra = {}) {
     totalFacturado: tf,
     totalPagado: tp,
     saldoPendiente: Math.round((tf - tp) * 100) / 100,
+    totalMantenimiento: Math.round(tm * 100) / 100,
   };
 }
 
@@ -1723,11 +2315,31 @@ export function getAllProveedores() {
         (SELECT COALESCE(SUM(f.monto_total), 0) FROM proveedor_facturas f WHERE f.proveedor_id = p.id AND f.activo = 1) AS total_facturado,
         (SELECT COALESCE(SUM(pa.monto), 0) FROM proveedor_factura_pagos pa
           JOIN proveedor_facturas ff ON ff.id = pa.factura_id
-          WHERE ff.proveedor_id = p.id AND ff.activo = 1) AS total_pagado
+          WHERE ff.proveedor_id = p.id AND ff.activo = 1) AS total_pagado,
+        (SELECT COALESCE(SUM(m.costo), 0) FROM mantenimiento m WHERE m.proveedor_id = p.id) AS total_mantenimiento
        FROM proveedores p WHERE p.activo = 1 ORDER BY p.nombre_razon_social COLLATE NOCASE`
     )
     .all();
-  return rows.map((r) => mapProveedorRow(r, { total_facturado: r.total_facturado, total_pagado: r.total_pagado }));
+  return rows.map((r) =>
+    mapProveedorRow(r, {
+      total_facturado: r.total_facturado,
+      total_pagado: r.total_pagado,
+      total_mantenimiento: r.total_mantenimiento,
+    })
+  );
+}
+
+/** Listado mínimo para selects (cualquier usuario autenticado). */
+export function getProveedoresCatalogo() {
+  const rows = db
+    .prepare(
+      'SELECT id, nombre_razon_social FROM proveedores WHERE activo = 1 ORDER BY nombre_razon_social COLLATE NOCASE'
+    )
+    .all();
+  return rows.map((r) => ({
+    id: String(r.id),
+    nombreRazonSocial: r.nombre_razon_social,
+  }));
 }
 
 export function getProveedorById(id) {
@@ -1739,10 +2351,15 @@ export function getProveedorById(id) {
         (SELECT COALESCE(SUM(f.monto_total), 0) FROM proveedor_facturas f WHERE f.proveedor_id = ? AND f.activo = 1) AS total_facturado,
         (SELECT COALESCE(SUM(pa.monto), 0) FROM proveedor_factura_pagos pa
           JOIN proveedor_facturas ff ON ff.id = pa.factura_id
-          WHERE ff.proveedor_id = ? AND ff.activo = 1) AS total_pagado`
+          WHERE ff.proveedor_id = ? AND ff.activo = 1) AS total_pagado,
+        (SELECT COALESCE(SUM(m.costo), 0) FROM mantenimiento m WHERE m.proveedor_id = ?) AS total_mantenimiento`
     )
-    .get(Number(id), Number(id));
-  const base = mapProveedorRow(p, { total_facturado: sums.total_facturado, total_pagado: sums.total_pagado });
+    .get(Number(id), Number(id), Number(id));
+  const base = mapProveedorRow(p, {
+    total_facturado: sums.total_facturado,
+    total_pagado: sums.total_pagado,
+    total_mantenimiento: sums.total_mantenimiento,
+  });
   const facturasRows = db
     .prepare(
       `SELECT f.*, u.placas AS unidad_placas, u.marca AS unidad_marca, u.modelo AS unidad_modelo
@@ -1797,7 +2414,31 @@ export function getProveedorById(id) {
     else if (fa.estado === 'parcial') porEstado.parciales += 1;
     else porEstado.pendientes += 1;
   }
-  return { ...base, facturas, resumenFacturas: porEstado };
+  const mantenimientosRows = db
+    .prepare(
+      `SELECT m.id, m.unidad_id, m.tipo, m.descripcion, m.costo, m.fecha_inicio, m.fecha_fin, m.estado, m.creado_en,
+              u.placas AS unidad_placas, u.marca AS unidad_marca, u.modelo AS unidad_modelo
+       FROM mantenimiento m
+       JOIN unidades u ON u.id = m.unidad_id
+       WHERE m.proveedor_id = ?
+       ORDER BY m.fecha_inicio DESC, m.id DESC`
+    )
+    .all(Number(id));
+  const mantenimientos = mantenimientosRows.map((row) => ({
+    id: String(row.id),
+    unidadId: String(row.unidad_id),
+    placas: row.unidad_placas || '',
+    marca: row.unidad_marca || '',
+    modelo: row.unidad_modelo || '',
+    tipo: row.tipo,
+    descripcion: row.descripcion || '',
+    costo: row.costo || 0,
+    fechaInicio: row.fecha_inicio,
+    fechaFin: row.fecha_fin || null,
+    estado: row.estado,
+    creadoEn: row.creado_en,
+  }));
+  return { ...base, facturas, resumenFacturas: porEstado, mantenimientos };
 }
 
 export function createProveedor(data, usuarioId = null) {

@@ -6,17 +6,21 @@ import {
   createUnidad,
   updateUnidad,
   setEstatusUnidad,
-  addDocumentoUnidad,
+  deleteDocumentoUnidad,
   addActividadUnidad,
   deleteUnidad,
   uploadImagenUnidad,
   deleteImagenUnidad,
+  getDocumentoUrl,
   getImagenUrl,
+  uploadDocumentoUnidad,
   type UnidadRow,
 } from '../api/client';
 
-type Estatus = 'Disponible' | 'En Renta' | 'Taller';
+type Estatus = 'Disponible' | 'En Renta';
 type Tab = 'expediente' | 'documentos' | 'imagenes' | 'historial';
+type SubestatusDisponible = 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
+type UbicacionDisponible = 'lote' | 'patio';
 
 type DocTipo = 'Seguro' | 'Verificación' | 'Tarjeta' | 'Otro';
 
@@ -25,6 +29,9 @@ const defaultForm = {
   marca: '',
   modelo: '',
   estatus: 'Disponible' as Estatus,
+  numeroSerieCaja: '',
+  subestatusDisponible: 'disponible' as SubestatusDisponible,
+  ubicacionDisponible: 'lote' as UbicacionDisponible,
   observaciones: '',
   tipoUnidad: 'remolque_seco' as 'remolque_seco' | 'refrigerado' | 'maquinaria',
 };
@@ -32,13 +39,37 @@ const defaultForm = {
 const TIPOS_UNIDAD = [
   { v: 'remolque_seco', l: 'Remolque seco' },
   { v: 'refrigerado', l: 'Refrigerado' },
-  { v: 'maquinaria', l: 'Maquinaria' },
+  { v: 'maquinaria', l: 'Mulita' },
 ];
+
+const SUBESTATUS_LABEL: Record<SubestatusDisponible, string> = {
+  disponible: 'Disponible',
+  taller: 'En taller',
+  almacen_exclusivo: 'Almacén exclusivo',
+  pendiente_placas: 'Pendiente de placas',
+};
+
+const UBICACION_LABEL: Record<UbicacionDisponible, string> = {
+  lote: 'Lote',
+  patio: 'Patio',
+};
+
+/** Valores generados cuando en BD la serie quedó vacía (no son un formato de negocio). */
+const SERIE_PLACEHOLDER_RE = /^(SIN-SERIE|PENDIENTE)-\d+$/;
+
+function esSeriePlaceholder(serie: string | undefined): boolean {
+  const s = String(serie ?? '').trim();
+  return !s || SERIE_PLACEHOLDER_RE.test(s);
+}
+
+/** Texto en tablas y badges: si falta serie guardada, mensaje claro en lugar del código interno. */
+function textoSerieCrud(serie: string | undefined): string {
+  return esSeriePlaceholder(serie) ? 'Pendiente de capturar' : String(serie ?? '').trim();
+}
 
 function statusPill(e: Estatus) {
   if (e === 'Disponible') return 'badge-disponible';
-  if (e === 'En Renta') return 'badge-renta';
-  return 'badge-taller';
+  return 'badge-renta';
 }
 
 export function Unidades() {
@@ -48,6 +79,9 @@ export function Unidades() {
 
   const [search, setSearch] = useState('');
   const [filtro, setFiltro] = useState<Estatus | 'Todos'>('Todos');
+  const [filtroSubestatus, setFiltroSubestatus] = useState<SubestatusDisponible | 'todos'>('todos');
+  const [filtroUbicacion, setFiltroUbicacion] = useState<UbicacionDisponible | 'todos'>('todos');
+  const [filtroCliente, setFiltroCliente] = useState('todos');
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -62,13 +96,15 @@ export function Unidades() {
   const [savingEditar, setSavingEditar] = useState(false);
 
   const [damageDesc, setDamageDesc] = useState('');
-  const [newDoc, setNewDoc] = useState<{ tipo: DocTipo; nombre: string }>({ tipo: 'Otro', nombre: '' });
+  const [newDoc, setNewDoc] = useState<{ tipo: DocTipo; file: File | null }>({ tipo: 'Otro', file: null });
   const [uploading, setUploading] = useState(false);
 
   const [confirmEliminar, setConfirmEliminar] = useState<string | null>(null);
   const [uploadingImg, setUploadingImg] = useState(false);
   const [imgDesc, setImgDesc] = useState('');
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
+  const [nuevaImagenes, setNuevaImagenes] = useState<File[]>([]);
+  const [previewUnidadNueva, setPreviewUnidadNueva] = useState<UnidadRow | null>(null);
 
   const { toast } = useNotification();
   const selected = useMemo(
@@ -90,7 +126,7 @@ export function Unidades() {
   }, [load]);
 
   const counts = useMemo(() => {
-    const c: Record<Estatus, number> = { Disponible: 0, 'En Renta': 0, Taller: 0 };
+    const c: Record<Estatus, number> = { Disponible: 0, 'En Renta': 0 };
     for (const u of unidades) c[u.estatus] += 1;
     return c;
   }, [unidades]);
@@ -99,17 +135,43 @@ export function Unidades() {
     const q = search.trim().toLowerCase();
     return unidades.filter((u) => {
       const byStatus = filtro === 'Todos' ? true : u.estatus === filtro;
-      const byText = q ? [u.placas, u.marca, u.modelo].some((x) => x.toLowerCase().includes(q)) : true;
-      return byStatus && byText;
+      const bySubestatus =
+        filtroSubestatus === 'todos' ? true : (u.subestatusDisponible ?? 'disponible') === filtroSubestatus;
+      const byUbicacion =
+        filtroUbicacion === 'todos' ? true : (u.ubicacionDisponible ?? 'lote') === filtroUbicacion;
+      const cliente = (u.clienteEnRenta ?? '').trim();
+      const byCliente = filtroCliente === 'todos' ? true : cliente.toLowerCase() === filtroCliente.toLowerCase();
+      const serieBusqueda = esSeriePlaceholder(u.numeroSerieCaja) ? 'pendiente' : (u.numeroSerieCaja ?? '');
+      const byText = q
+        ? [u.placas, u.marca, u.modelo, serieBusqueda, cliente].some((x) => x.toLowerCase().includes(q))
+        : true;
+      const shouldApplyDisponibleFilters = filtro === 'Disponible' || filtro === 'Todos';
+      const shouldApplyClienteFilter = filtro === 'En Renta' || filtro === 'Todos';
+      return (
+        byStatus &&
+        byText &&
+        (shouldApplyDisponibleFilters ? bySubestatus && byUbicacion : true) &&
+        (shouldApplyClienteFilter ? byCliente : true)
+      );
     });
-  }, [unidades, filtro, search]);
+  }, [unidades, filtro, filtroSubestatus, filtroUbicacion, filtroCliente, search]);
+
+  const clientesEnRenta = useMemo(() => {
+    const set = new Set<string>();
+    for (const u of unidades) {
+      if (u.estatus !== 'En Renta') continue;
+      const c = (u.clienteEnRenta ?? '').trim();
+      if (c) set.add(c);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'es-MX'));
+  }, [unidades]);
 
   function openDrawer(id: string, nextTab: Tab = 'expediente') {
     setSelectedId(id);
     setTab(nextTab);
     setDrawerOpen(true);
     setDamageDesc('');
-    setNewDoc({ tipo: 'Otro', nombre: '' });
+    setNewDoc({ tipo: 'Otro', file: null });
     setLightboxImg(null);
   }
 
@@ -119,6 +181,7 @@ export function Unidades() {
 
   function openNueva() {
     setFormNueva(defaultForm);
+    setNuevaImagenes([]);
     setModalNueva(true);
     setError(null);
   }
@@ -129,6 +192,9 @@ export function Unidades() {
       marca: u.marca,
       modelo: u.modelo,
       estatus: u.estatus,
+      numeroSerieCaja: esSeriePlaceholder(u.numeroSerieCaja) ? '' : (u.numeroSerieCaja || ''),
+      subestatusDisponible: (u.subestatusDisponible ?? 'disponible') as SubestatusDisponible,
+      ubicacionDisponible: (u.ubicacionDisponible ?? 'lote') as UbicacionDisponible,
       observaciones: u.observaciones || '',
       tipoUnidad: (u.tipoUnidad ?? 'remolque_seco') as 'remolque_seco' | 'refrigerado' | 'maquinaria',
     });
@@ -146,14 +212,25 @@ export function Unidades() {
       marca: formNueva.marca.trim(),
       modelo: formNueva.modelo.trim(),
       estatus: formNueva.estatus,
+      numeroSerieCaja: formNueva.numeroSerieCaja.trim(),
+      subestatusDisponible: formNueva.subestatusDisponible,
+      ubicacionDisponible: formNueva.ubicacionDisponible,
       observaciones: formNueva.observaciones.trim(),
       tipoUnidad: formNueva.tipoUnidad,
     })
-      .then((u) => {
+      .then(async (u) => {
+        if (nuevaImagenes.length > 0) {
+          let updated = u;
+          for (const file of nuevaImagenes) {
+            updated = await uploadImagenUnidad(updated.id, file, 'Registro inicial');
+          }
+          u = updated;
+        }
         toast('Unidad creada correctamente');
         load();
         setModalNueva(false);
-        openDrawer(u.id, 'expediente');
+        setPreviewUnidadNueva(u);
+        setNuevaImagenes([]);
       })
       .catch((e) => {
         const msg = e instanceof Error ? e.message : 'Error';
@@ -173,6 +250,9 @@ export function Unidades() {
       marca: formEditar.marca.trim(),
       modelo: formEditar.modelo.trim(),
       estatus: formEditar.estatus,
+      numeroSerieCaja: formEditar.numeroSerieCaja.trim(),
+      subestatusDisponible: formEditar.subestatusDisponible,
+      ubicacionDisponible: formEditar.ubicacionDisponible,
       observaciones: formEditar.observaciones.trim(),
       tipoUnidad: formEditar.tipoUnidad,
     })
@@ -223,15 +303,30 @@ export function Unidades() {
 
   async function handleAddDocument() {
     if (!selected) return;
-    const nombre = newDoc.nombre.trim();
-    if (!nombre) return;
+    if (!newDoc.file) return;
     setUploading(true);
     setError(null);
-    addDocumentoUnidad(selected.id, newDoc.tipo, nombre)
+    uploadDocumentoUnidad(selected.id, newDoc.tipo, newDoc.file)
       .then((u) => {
-        toast('Documento agregado');
+        toast('Documento subido');
         setUnidades((prev) => prev.map((x) => (x.id === u.id ? u : x)));
-        setNewDoc({ tipo: 'Otro', nombre: '' });
+        setNewDoc({ tipo: 'Otro', file: null });
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : 'Error');
+        toast(e instanceof Error ? e.message : 'Error', 'error');
+      })
+      .finally(() => setUploading(false));
+  }
+
+  function handleDeleteDocument(docId: string) {
+    if (!selected) return;
+    setUploading(true);
+    setError(null);
+    deleteDocumentoUnidad(selected.id, docId)
+      .then((u) => {
+        toast('Documento eliminado');
+        setUnidades((prev) => prev.map((x) => (x.id === u.id ? u : x)));
       })
       .catch((e) => {
         setError(e instanceof Error ? e.message : 'Error');
@@ -271,6 +366,17 @@ export function Unidades() {
         setError(err instanceof Error ? err.message : 'Error');
         toast(err instanceof Error ? err.message : 'Error', 'error');
       });
+  }
+
+  function handleNuevaImagenesChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    setNuevaImagenes((prev) => [...prev, ...files].slice(0, 8));
+    e.target.value = '';
+  }
+
+  function removeNuevaImagen(idx: number) {
+    setNuevaImagenes((prev) => prev.filter((_, i) => i !== idx));
   }
 
   function handleEliminarUnidad(id: string) {
@@ -329,10 +435,10 @@ export function Unidades() {
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-gray-500">Estatus:</span>
-            {(['Todos', 'Disponible', 'En Renta', 'Taller'] as const).map((opt) => {
+            {(['Todos', 'Disponible', 'En Renta'] as const).map((opt) => {
               const isActive = filtro === opt;
               const count =
-                opt === 'Todos' ? unidades.length : opt === 'Disponible' ? counts.Disponible : opt === 'En Renta' ? counts['En Renta'] : counts.Taller;
+                opt === 'Todos' ? unidades.length : opt === 'Disponible' ? counts.Disponible : counts['En Renta'];
               return (
                 <button
                   key={opt}
@@ -360,22 +466,66 @@ export function Unidades() {
             Haz clic en una fila o en <span className="font-semibold">Expediente</span> para ver documentos y registrar novedades.
           </span>
         </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <label className="text-sm font-medium text-gray-700">
+            Disponible: subestatus
+            <select
+              value={filtroSubestatus}
+              onChange={(e) => setFiltroSubestatus(e.target.value as SubestatusDisponible | 'todos')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todos</option>
+              {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
+                <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-medium text-gray-700">
+            Disponible: ubicación
+            <select
+              value={filtroUbicacion}
+              onChange={(e) => setFiltroUbicacion(e.target.value as UbicacionDisponible | 'todos')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todas</option>
+              {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
+                <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-medium text-gray-700">
+            En renta: cliente
+            <select
+              value={filtroCliente}
+              onChange={(e) => setFiltroCliente(e.target.value)}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todos</option>
+              {clientesEnRenta.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* Table */}
-      <div className="overflow-hidden rounded-lg border border-skyline-border bg-white shadow-sm">
+      <div className="overflow-x-auto rounded-lg border border-skyline-border bg-white shadow-sm">
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-skyline-border border-t-skyline-blue" />
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="min-w-[980px] w-full text-sm">
             <thead>
               <tr className="border-b border-skyline-border bg-skyline-bg">
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Foto</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Placas</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Marca</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Modelo</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Serie caja</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Estatus</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Ubicación / Cliente</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Acciones</th>
               </tr>
             </thead>
@@ -383,40 +533,62 @@ export function Unidades() {
               {filtered.map((u) => (
                 <tr
                   key={u.id}
-                  className="cursor-pointer border-b border-skyline-border last:border-0 hover:bg-skyline-blue/5"
+                  className="cursor-pointer border-b border-skyline-border last:border-0 hover:bg-skyline-blue/5 transition-colors"
                   onClick={() => openDrawer(u.id, 'expediente')}
                 >
+                  <td className="px-4 py-3">
+                    {u.imagenes?.[0] ? (
+                      <img
+                        src={getImagenUrl(u.imagenes[0].ruta)}
+                        alt={`Unidad ${u.placas}`}
+                        className="size-12 rounded-md object-cover ring-1 ring-skyline-border"
+                      />
+                    ) : (
+                      <div className="flex size-12 items-center justify-center rounded-md bg-skyline-bg text-skyline-muted ring-1 ring-skyline-border">
+                        <Icon icon="mdi:image-off-outline" className="size-5" aria-hidden />
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-semibold text-gray-900">{u.placas}</td>
                   <td className="px-4 py-3 text-gray-700">{u.marca}</td>
                   <td className="px-4 py-3 text-gray-700">{u.modelo}</td>
+                  <td className="px-4 py-3 text-gray-700">{textoSerieCrud(u.numeroSerieCaja)}</td>
                   <td className="px-4 py-3">
                     <span className={`badge ${statusPill(u.estatus)}`}>{u.estatus}</span>
+                    {u.estatus === 'Disponible' && (u.subestatusDisponible ?? 'disponible') !== 'disponible' ? (
+                      <p className="mt-1 text-xs text-gray-500">{SUBESTATUS_LABEL[u.subestatusDisponible ?? 'disponible']}</p>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-600">
+                    {u.estatus === 'Disponible'
+                      ? UBICACION_LABEL[u.ubicacionDisponible ?? 'lote']
+                      : (u.clienteEnRenta || 'Sin cliente')}
                   </td>
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1.5">
                       <button
                         type="button"
                         onClick={() => openDrawer(u.id, 'expediente')}
-                        className="btn btn-outline btn-sm"
+                        className="btn btn-outline btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
+                        title="Expediente"
                       >
                         <Icon icon="mdi:folder" className="size-4" aria-hidden />
-                        Expediente
                       </button>
                       <button
                         type="button"
                         onClick={() => openDrawer(u.id, 'documentos')}
-                        className="btn btn-outline-secondary btn-sm"
+                        className="btn btn-outline-secondary btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
+                        title="Documentos"
                       >
                         <Icon icon="mdi:file-document-outline" className="size-4" aria-hidden />
-                        Documentos
                       </button>
                       <button
                         type="button"
                         onClick={() => openDrawer(u.id, 'imagenes')}
-                        className="btn btn-outline-secondary btn-sm"
+                        className="btn btn-outline-secondary btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
+                        title="Imágenes"
                       >
                         <Icon icon="mdi:image-multiple" className="size-4" aria-hidden />
-                        Imágenes
                       </button>
                       <button
                         type="button"
@@ -424,11 +596,10 @@ export function Unidades() {
                           e.stopPropagation();
                           openEditar(u);
                         }}
-                        className="btn btn-outline btn-sm"
+                        className="btn btn-outline btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
                         title="Editar datos"
                       >
                         <Icon icon="mdi:pencil" className="size-4" aria-hidden />
-                        Editar
                       </button>
                     </div>
                   </td>
@@ -436,7 +607,7 @@ export function Unidades() {
               ))}
               {filtered.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-10 text-center text-sm text-gray-500">
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-500">
                     {unidades.length === 0
                       ? 'No hay unidades. Haz clic en "Nueva unidad" para agregar la primera.'
                       : 'No hay unidades con esos filtros.'}
@@ -452,12 +623,12 @@ export function Unidades() {
       {modalNueva && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !savingNueva && setModalNueva(false)}>
           <div
-            className="w-full max-w-md rounded-lg border border-skyline-border bg-white p-6 shadow-lg"
+            className="w-full max-w-2xl rounded-xl border border-skyline-border bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-4 text-lg font-semibold text-gray-900">Nueva unidad</h2>
-            <form onSubmit={handleCreateUnidad} className="flex flex-col gap-4">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+            <form onSubmit={handleCreateUnidad} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Placas *
                 <input
                   type="text"
@@ -492,7 +663,7 @@ export function Unidades() {
                   />
                 </label>
               </div>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Tipo de unidad
                 <select
                   value={formNueva.tipoUnidad}
@@ -511,12 +682,76 @@ export function Unidades() {
                   onChange={(e) => setFormNueva((f) => ({ ...f, estatus: e.target.value as Estatus }))}
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 >
-                  {(['Disponible', 'En Renta', 'Taller'] as Estatus[]).map((e) => (
+                  {(['Disponible', 'En Renta'] as Estatus[]).map((e) => (
                     <option key={e} value={e}>{e}</option>
                   ))}
                 </select>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                Número de serie de la caja
+                <input
+                  type="text"
+                  value={formNueva.numeroSerieCaja}
+                  onChange={(e) => setFormNueva((f) => ({ ...f, numeroSerieCaja: e.target.value.toUpperCase() }))}
+                  placeholder="Serie / VIN"
+                  className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  required
+                />
+                <span className="mt-1 block text-xs font-normal text-gray-500">
+                  Sin formato fijo: letras, números y guiones según tu VIN o número de caja. Se guarda en mayúsculas.
+                </span>
+              </label>
+              {formNueva.estatus === 'Disponible' && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                    Subestatus disponible
+                    <select
+                      value={formNueva.subestatusDisponible}
+                      onChange={(e) => setFormNueva((f) => ({ ...f, subestatusDisponible: e.target.value as SubestatusDisponible }))}
+                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                    >
+                      {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
+                        <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                    Ubicación
+                    <select
+                      value={formNueva.ubicacionDisponible}
+                      onChange={(e) => setFormNueva((f) => ({ ...f, ubicacionDisponible: e.target.value as UbicacionDisponible }))}
+                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                    >
+                      {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
+                        <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+              <div className="rounded-md border border-skyline-border p-3 md:col-span-2">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Imágenes al registrar
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    multiple
+                    onChange={handleNuevaImagenesChange}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-skyline-blue file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white file:hover:bg-skyline-blue-hover"
+                  />
+                </label>
+                {nuevaImagenes.length > 0 && (
+                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {nuevaImagenes.map((img, idx) => (
+                      <div key={`${img.name}-${idx}`} className="rounded-md border border-skyline-border bg-skyline-bg px-2 py-1 text-xs">
+                        <p className="truncate">{img.name}</p>
+                        <button type="button" className="mt-1 text-red-600" onClick={() => removeNuevaImagen(idx)}>Quitar</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Observaciones
                 <textarea
                   value={formNueva.observaciones}
@@ -526,7 +761,7 @@ export function Unidades() {
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 />
               </label>
-              <div className="mt-2 flex justify-end gap-2">
+              <div className="mt-2 flex justify-end gap-2 md:col-span-2">
                 <button type="button" className="btn btn-outline" onClick={() => setModalNueva(false)} disabled={savingNueva}>
                   Cancelar
                 </button>
@@ -543,12 +778,12 @@ export function Unidades() {
       {modalEditar && selectedId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !savingEditar && setModalEditar(false)}>
           <div
-            className="w-full max-w-md rounded-lg border border-skyline-border bg-white p-6 shadow-lg"
+            className="w-full max-w-2xl rounded-xl border border-skyline-border bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-4 text-lg font-semibold text-gray-900">Editar unidad</h2>
-            <form onSubmit={handleEditarUnidad} className="flex flex-col gap-4">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+            <form onSubmit={handleEditarUnidad} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Tipo de unidad
                 <select
                   value={formEditar.tipoUnidad}
@@ -560,7 +795,7 @@ export function Unidades() {
                   ))}
                 </select>
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Placas *
                 <input
                   type="text"
@@ -599,12 +834,53 @@ export function Unidades() {
                   onChange={(e) => setFormEditar((f) => ({ ...f, estatus: e.target.value as Estatus }))}
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 >
-                  {(['Disponible', 'En Renta', 'Taller'] as Estatus[]).map((e) => (
+                  {(['Disponible', 'En Renta'] as Estatus[]).map((e) => (
                     <option key={e} value={e}>{e}</option>
                   ))}
                 </select>
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                Número de serie de la caja
+                <input
+                  type="text"
+                  value={formEditar.numeroSerieCaja}
+                  onChange={(e) => setFormEditar((f) => ({ ...f, numeroSerieCaja: e.target.value.toUpperCase() }))}
+                  className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  required
+                />
+                <span className="mt-1 block text-xs font-normal text-gray-500">
+                  Mismo criterio que en el alta. Si antes aparecía «Pendiente», aquí va el número real de la caja.
+                </span>
+              </label>
+              {formEditar.estatus === 'Disponible' && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                    Subestatus disponible
+                    <select
+                      value={formEditar.subestatusDisponible}
+                      onChange={(e) => setFormEditar((f) => ({ ...f, subestatusDisponible: e.target.value as SubestatusDisponible }))}
+                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                    >
+                      {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
+                        <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                    Ubicación
+                    <select
+                      value={formEditar.ubicacionDisponible}
+                      onChange={(e) => setFormEditar((f) => ({ ...f, ubicacionDisponible: e.target.value as UbicacionDisponible }))}
+                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                    >
+                      {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
+                        <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Observaciones
                 <textarea
                   value={formEditar.observaciones}
@@ -613,7 +889,7 @@ export function Unidades() {
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 />
               </label>
-              <div className="mt-2 flex justify-end gap-2">
+              <div className="mt-2 flex justify-end gap-2 md:col-span-2">
                 <button type="button" className="btn btn-outline" onClick={() => setModalEditar(false)} disabled={savingEditar}>
                   Cancelar
                 </button>
@@ -647,6 +923,23 @@ export function Unidades() {
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className={`badge ${statusPill(selected.estatus)}`}>{selected.estatus}</span>
+                    <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                      Serie: {textoSerieCrud(selected.numeroSerieCaja)}
+                    </span>
+                    {selected.estatus === 'Disponible' ? (
+                      <>
+                        <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                          {SUBESTATUS_LABEL[selected.subestatusDisponible ?? 'disponible']}
+                        </span>
+                        <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                          {UBICACION_LABEL[selected.ubicacionDisponible ?? 'lote']}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                        Cliente: {selected.clienteEnRenta || 'Sin cliente'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -706,8 +999,8 @@ export function Unidades() {
                       <h3 className="text-sm font-semibold text-gray-900">Cambiar estatus</h3>
                       <span className="text-xs font-semibold uppercase tracking-wider text-skyline-muted">Acción rápida</span>
                     </div>
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      {(['Disponible', 'En Renta', 'Taller'] as Estatus[]).map((e) => {
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {(['Disponible', 'En Renta'] as Estatus[]).map((e) => {
                         const active = selected.estatus === e;
                         return (
                           <button
@@ -777,9 +1070,7 @@ export function Unidades() {
                 <div className="space-y-5">
                   <div className="rounded-lg border border-skyline-border bg-white p-4 shadow-sm">
                     <h3 className="text-sm font-semibold text-gray-900">Agregar documento</h3>
-                    <p className="mt-1 text-xs font-medium text-gray-500">
-                      Registra el nombre del documento (archivo físico o digital).
-                    </p>
+                    <p className="mt-1 text-xs font-medium text-gray-500">Selecciona un archivo y súbelo al expediente de la unidad.</p>
                     <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                         Tipo
@@ -794,26 +1085,29 @@ export function Unidades() {
                         </select>
                       </label>
                       <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
-                        Nombre del archivo
+                        Archivo
                         <input
-                          value={newDoc.nombre}
-                          onChange={(e) => setNewDoc((d) => ({ ...d, nombre: e.target.value }))}
-                          placeholder="Ej. Seguro_ABC-12-34.pdf"
-                          className="rounded-md border border-skyline-border px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                          type="file"
+                          accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,image/*"
+                          onChange={(e) => setNewDoc((d) => ({ ...d, file: e.target.files?.[0] || null }))}
+                          className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-skyline-blue file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white file:hover:bg-skyline-blue-hover"
                         />
+                        <span className="text-xs font-normal text-gray-500">
+                          El nombre en el listado será el del archivo. Tipos habituales: PDF, imágenes, Word, Excel, PowerPoint o TXT (máx. 20 MB).
+                        </span>
                       </label>
                     </div>
                     <div className="mt-4 flex justify-end gap-2">
-                      <button type="button" onClick={() => setNewDoc({ tipo: 'Otro', nombre: '' })} className="btn btn-outline" disabled={uploading}>
+                      <button type="button" onClick={() => setNewDoc({ tipo: 'Otro', file: null })} className="btn btn-outline" disabled={uploading}>
                         Limpiar
                       </button>
                       <button
                         type="button"
                         onClick={handleAddDocument}
-                        disabled={uploading || !newDoc.nombre.trim()}
-                        className={`btn btn-primary ${uploading || !newDoc.nombre.trim() ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        disabled={uploading || !newDoc.file}
+                        className={`btn btn-primary ${uploading || !newDoc.file ? 'opacity-50 cursor-not-allowed' : ''}`}
                       >
-                        {uploading ? 'Guardando…' : (
+                        {uploading ? 'Subiendo…' : (
                           <>
                             <Icon icon="mdi:upload" className="size-5" aria-hidden />
                             Agregar
@@ -831,12 +1125,34 @@ export function Unidades() {
                       {selected.documentos.map((d) => (
                         <li key={d.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-skyline-border bg-white px-3 py-2">
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-gray-900">{d.nombre}</p>
+                            {d.ruta ? (
+                              <a
+                                href={getDocumentoUrl(d.ruta)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="truncate text-sm font-semibold text-skyline-blue hover:underline"
+                                title="Abrir documento"
+                              >
+                                {d.nombre}
+                              </a>
+                            ) : (
+                              <p className="truncate text-sm font-semibold text-gray-900">{d.nombre}</p>
+                            )}
                             <p className="text-xs text-gray-500">{d.tipo}</p>
                           </div>
-                          <span className="text-xs font-semibold text-skyline-muted">
-                            {new Date(d.fechaSubida).toLocaleDateString('es-MX')}
-                          </span>
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-semibold text-skyline-muted">
+                              {new Date(d.fechaSubida).toLocaleDateString('es-MX')}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteDocument(d.id)}
+                              className="rounded-md border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
+                              disabled={uploading}
+                            >
+                              Borrar
+                            </button>
+                          </div>
                         </li>
                       ))}
                     </ul>
@@ -951,6 +1267,55 @@ export function Unidades() {
                   </ul>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewUnidadNueva && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-lg border border-skyline-border bg-white p-6 shadow-lg">
+            <h3 className="text-lg font-semibold text-gray-900">Vista previa de la nueva unidad</h3>
+            <p className="mt-1 text-sm text-gray-500">Revisa los datos antes de entrar al expediente completo.</p>
+            <div className="mt-4 rounded-lg border border-skyline-border bg-skyline-bg p-4">
+              <p className="text-base font-semibold text-gray-900">
+                {previewUnidadNueva.placas} · {previewUnidadNueva.marca} {previewUnidadNueva.modelo}
+              </p>
+              <p className="mt-1 text-sm text-gray-600">Serie: {textoSerieCrud(previewUnidadNueva.numeroSerieCaja)}</p>
+              <p className="mt-1 text-sm text-gray-600">
+                Estatus: {previewUnidadNueva.estatus}
+                {previewUnidadNueva.estatus === 'Disponible'
+                  ? ` · ${SUBESTATUS_LABEL[previewUnidadNueva.subestatusDisponible ?? 'disponible']} · ${UBICACION_LABEL[previewUnidadNueva.ubicacionDisponible ?? 'lote']}`
+                  : ` · Cliente: ${previewUnidadNueva.clienteEnRenta || 'Sin cliente'}`}
+              </p>
+              {(previewUnidadNueva.imagenes ?? []).length > 0 && (
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {(previewUnidadNueva.imagenes ?? []).slice(0, 3).map((img) => (
+                    <img
+                      key={img.id}
+                      src={getImagenUrl(img.ruta)}
+                      alt={img.descripcion || img.nombreArchivo}
+                      className="aspect-square w-full rounded-md object-cover"
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="btn btn-outline" onClick={() => setPreviewUnidadNueva(null)}>
+                Cerrar
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const id = previewUnidadNueva.id;
+                  setPreviewUnidadNueva(null);
+                  openDrawer(id, 'expediente');
+                }}
+              >
+                Ver expediente
+              </button>
             </div>
           </div>
         </div>
