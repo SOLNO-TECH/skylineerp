@@ -25,8 +25,11 @@ import {
   addUnidadActividad,
   addUnidadImagen,
   deleteUnidadImagen,
+  setUnidadExpedienteFoto,
+  clearUnidadExpedienteFotoSlot,
   deleteUnidad,
   existePlacas,
+  existeNumeroEconomico,
   getAllRentas,
   getRentaById,
   getRentasPorMes,
@@ -492,12 +495,30 @@ app.get('/api/unidades/:id', requireAuth, (req, res) => {
 app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
   const body = req.body || {};
   const {
-    placas, marca, modelo, estatus, subestatusDisponible, ubicacionDisponible,
-    kilometraje, combustiblePct, observaciones, tipoUnidad, horasMotor,
+    placas,
+    numeroEconomico,
+    marca,
+    modelo,
+    estatus,
+    subestatusDisponible,
+    ubicacionDisponible,
+    kilometraje,
+    combustiblePct,
+    observaciones,
+    tipoUnidad,
+    horasMotor,
+    tieneGps,
+    gpsNumero1,
+    gpsNumero2,
+    gestorFisicoMecanica,
+    unidadRotulada,
   } = body;
   const numeroSerieCaja = pickNumeroSerieCaja(body);
   if (!placas || !marca || !modelo) {
     return res.status(400).json({ error: 'Placas, marca y modelo son requeridos' });
+  }
+  if (!numeroEconomico || !String(numeroEconomico).trim()) {
+    return res.status(400).json({ error: 'El número económico es requerido' });
   }
   if (!numeroSerieCaja) {
     return res.status(400).json({ error: 'El número de serie de la caja es requerido' });
@@ -505,10 +526,14 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
   if (existePlacas(placas)) {
     return res.status(400).json({ error: 'Ya existe una unidad con esas placas' });
   }
+  if (existeNumeroEconomico(String(numeroEconomico).trim())) {
+    return res.status(400).json({ error: 'Ya existe una unidad con ese número económico' });
+  }
   try {
     const unidad = createUnidad(
       {
         placas,
+        numeroEconomico: String(numeroEconomico).trim(),
         marca,
         modelo,
         estatus,
@@ -520,6 +545,11 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
         observaciones,
         tipoUnidad,
         horasMotor,
+        tieneGps,
+        gpsNumero1,
+        gpsNumero2,
+        gestorFisicoMecanica,
+        unidadRotulada,
       },
       req.user.id
     );
@@ -545,13 +575,38 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
   if (!unidad) return res.status(404).json({ error: 'Unidad no encontrada' });
   const body = req.body || {};
   const {
-    placas, marca, modelo, estatus, subestatusDisponible, ubicacionDisponible,
-    kilometraje, combustiblePct, observaciones, tipoUnidad, estadoMantenimiento, horasMotor,
+    placas,
+    marca,
+    modelo,
+    estatus,
+    subestatusDisponible,
+    ubicacionDisponible,
+    kilometraje,
+    combustiblePct,
+    observaciones,
+    tipoUnidad,
+    estadoMantenimiento,
+    horasMotor,
+    numeroEconomico,
+    tieneGps,
+    gpsNumero1,
+    gpsNumero2,
+    gestorFisicoMecanica,
+    unidadRotulada,
   } = body;
   const numeroSeriePicked = pickNumeroSerieCaja(body);
   const numeroSerieCaja = numeroSeriePicked !== undefined ? numeroSeriePicked : undefined;
   if (placas != null && existePlacas(placas, Number(id))) {
     return res.status(400).json({ error: 'Ya existe otra unidad con esas placas' });
+  }
+  if (numeroEconomico !== undefined) {
+    const ne = String(numeroEconomico).trim();
+    if (!ne) {
+      return res.status(400).json({ error: 'El número económico no puede estar vacío' });
+    }
+    if (existeNumeroEconomico(ne, Number(id))) {
+      return res.status(400).json({ error: 'Ya existe otra unidad con ese número económico' });
+    }
   }
   if (numeroSerieCaja !== undefined && !numeroSerieCaja) {
     return res.status(400).json({ error: 'El número de serie de la caja no puede estar vacío' });
@@ -565,6 +620,7 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
         modelo,
         estatus,
         numeroSerieCaja,
+        numeroEconomico,
         subestatusDisponible,
         ubicacionDisponible,
         kilometraje,
@@ -573,6 +629,11 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
         tipoUnidad,
         estadoMantenimiento,
         horasMotor,
+        tieneGps,
+        gpsNumero1,
+        gpsNumero2,
+        gestorFisicoMecanica,
+        unidadRotulada,
       },
       req.user.id
     );
@@ -648,6 +709,53 @@ app.post('/api/unidades/:id/actividad', requireAuth, requireEdicionFlota, (req, 
     res.status(201).json({ unidad });
   } catch (err) {
     res.status(500).json({ error: 'Error al registrar actividad' });
+  }
+});
+
+const EXPEDIENTE_FOTO_SLOTS = ['fm_anterior', 'fm_vigente', 'tarjeta_circulacion'];
+
+app.post('/api/unidades/:id/expediente-fotos', requireAuth, requireEdicionFlota, upload.single('imagen'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
+  const slot = String(req.body?.slot || '').trim();
+  if (!EXPEDIENTE_FOTO_SLOTS.includes(slot)) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Tipo de foto inválido (slot)' });
+  }
+  const ruta = `unidades/${req.params.id}/${req.file.filename}`;
+  try {
+    const result = setUnidadExpedienteFoto(req.params.id, slot, ruta, req.user.id);
+    if (!result) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Unidad no encontrada' });
+    }
+    if (result.oldRuta) {
+      const fp = join(UPLOADS_BASE, result.oldRuta);
+      if (existsSync(fp)) fs.unlink(fp, () => {});
+    }
+    res.status(201).json({ unidad: result.unidad });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: 'Error al subir foto del expediente' });
+  }
+});
+
+app.delete('/api/unidades/:id/expediente-fotos/:slot', requireAuth, requireEdicionFlota, (req, res) => {
+  const slot = String(req.params.slot || '').trim();
+  if (!EXPEDIENTE_FOTO_SLOTS.includes(slot)) {
+    return res.status(400).json({ error: 'Tipo de foto inválido' });
+  }
+  try {
+    const result = clearUnidadExpedienteFotoSlot(req.params.id, slot, req.user.id);
+    if (!result || String(result.unidad?.id) !== String(req.params.id)) {
+      return res.status(404).json({ error: 'Unidad no encontrada' });
+    }
+    if (result.oldRuta) {
+      const fp = join(UPLOADS_BASE, result.oldRuta);
+      if (existsSync(fp)) fs.unlinkSync(fp);
+    }
+    res.json({ unidad: result.unidad });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al eliminar foto del expediente' });
   }
 });
 

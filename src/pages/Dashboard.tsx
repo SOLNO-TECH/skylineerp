@@ -185,7 +185,9 @@ export function Dashboard() {
   const [actividad, setActividad] = useState<
     { id: string; accion: string; detalle: string; fecha: string; icon: string; usuarioNombre?: string }[]
   >([]);
-  const [vencimientos, setVencimientos] = useState<{ id: string; placas: string; clienteNombre: string; fechaFin: string }[]>([]);
+  const [vencimientos, setVencimientos] = useState<
+    { id: string; placas: string; numeroEconomico?: string; clienteNombre: string; fechaFin: string }[]
+  >([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -438,7 +440,10 @@ export function Dashboard() {
                     }`}
                   >
                     <div>
-                      <p className="text-sm font-medium text-gray-900">{v.placas} — {v.clienteNombre}</p>
+                      <p className="text-sm font-medium text-gray-900">
+                        {(v.numeroEconomico ?? '').trim() ? `${(v.numeroEconomico ?? '').trim()} · ${v.placas}` : v.placas} —{' '}
+                        {v.clienteNombre}
+                      </p>
                       <p className="text-xs text-gray-500">Vence: {formatFechaVencimiento(v.fechaFin)}</p>
                     </div>
                     {urgente ? (

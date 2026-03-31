@@ -10,6 +10,7 @@ import {
   type UnidadRow,
   type ProveedorCatalogoRow,
 } from '../api/client';
+import { etiquetaUnidadLista } from '../lib/unidadDisplay';
 
 const TIPOS = [
   { v: 'preventivo', l: 'Preventivo' },
@@ -34,6 +35,7 @@ function textoBusquedaMantenimiento(m: MantenimientoRow): string {
   const tipoLabel = TIPOS.find((t) => t.v === m.tipo)?.l ?? m.tipo;
   const estadoLabel = ESTADOS.find((e) => e.v === m.estado)?.l ?? m.estado;
   return [
+    m.numeroEconomico,
     m.placas,
     m.unidadId,
     m.marca,
@@ -244,7 +246,12 @@ export function Mantenimiento() {
                 >
                   <div>
                     <strong className="block text-gray-900">
-                      {m.placas ?? m.unidadId} · {m.marca} {m.modelo}
+                      {etiquetaUnidadLista({
+                        numeroEconomico: m.numeroEconomico ?? '',
+                        placas: m.placas ?? m.unidadId,
+                        marca: m.marca ?? '—',
+                        modelo: m.modelo ?? '',
+                      })}
                     </strong>
                     <span className="text-sm text-gray-600">{m.descripcion || m.tipo}</span>
                     {m.proveedorNombre ? (
@@ -288,7 +295,13 @@ export function Mantenimiento() {
                   onClick={() => abrirEditar(m)}
                 >
                   <span>
-                    {m.placas ?? m.unidadId} · {m.tipo}
+                    {etiquetaUnidadLista({
+                      numeroEconomico: m.numeroEconomico ?? '',
+                      placas: m.placas ?? m.unidadId,
+                      marca: m.marca ?? '—',
+                      modelo: m.modelo ?? '',
+                    })}{' '}
+                    · {m.tipo}
                   </span>
                   <span className="text-gray-500">
                     {formatearFecha(m.fechaInicio)} · ${(m.costo ?? 0).toLocaleString('es-MX')}
@@ -323,7 +336,7 @@ export function Mantenimiento() {
                 type="search"
                 value={busqueda}
                 onChange={(e) => setBusqueda(e.target.value)}
-                placeholder="Placas, descripción, tipo, estado, costo…"
+                placeholder="Núm. económico, placas, descripción, tipo…"
                 className="input w-full"
                 autoComplete="off"
               />
@@ -341,7 +354,7 @@ export function Mantenimiento() {
                 <option value="">Todas</option>
                 {unidades.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.placas} — {u.marca} {u.modelo}
+                    {etiquetaUnidadLista(u)}
                   </option>
                 ))}
               </select>
@@ -424,7 +437,16 @@ export function Mantenimiento() {
                       className="cursor-pointer border-b border-skyline-border hover:bg-skyline-bg"
                       onClick={() => abrirEditar(m)}
                     >
-                      <td className="py-2 font-medium">{m.placas ?? m.unidadId}</td>
+                      <td className="py-2 font-medium">
+                        {(m.numeroEconomico ?? '').trim() ? (
+                          <span className="block">
+                            <span className="font-semibold tabular-nums">{(m.numeroEconomico ?? '').trim()}</span>
+                            <span className="block text-xs font-normal text-gray-600">{m.placas ?? m.unidadId}</span>
+                          </span>
+                        ) : (
+                          (m.placas ?? m.unidadId)
+                        )}
+                      </td>
                       <td className="py-2 text-gray-700">
                         {m.proveedorNombre ? (
                           <span className="text-sm">{m.proveedorNombre}</span>
@@ -484,7 +506,7 @@ export function Mantenimiento() {
                 >
                   {unidades.map((u) => (
                     <option key={u.id} value={u.id}>
-                      {u.placas} – {u.marca} {u.modelo}
+                      {etiquetaUnidadLista(u)}
                     </option>
                   ))}
                 </select>

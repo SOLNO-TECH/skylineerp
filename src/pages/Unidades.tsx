@@ -11,11 +11,15 @@ import {
   deleteUnidad,
   uploadImagenUnidad,
   deleteImagenUnidad,
+  uploadUnidadExpedienteFoto,
+  deleteUnidadExpedienteFoto,
   getDocumentoUrl,
   getImagenUrl,
   uploadDocumentoUnidad,
   type UnidadRow,
+  type UnidadExpedienteFotoSlot,
 } from '../api/client';
+import { TIPOS_UNIDAD_OPCIONES, type TipoUnidadCatalogo } from '../lib/tipoUnidadCatalogo';
 
 type Estatus = 'Disponible' | 'En Renta';
 type Tab = 'expediente' | 'documentos' | 'imagenes' | 'historial';
@@ -23,24 +27,56 @@ type SubestatusDisponible = 'disponible' | 'taller' | 'almacen_exclusivo' | 'pen
 type UbicacionDisponible = 'lote' | 'patio';
 
 type DocTipo = 'Seguro' | 'Verificación' | 'Tarjeta' | 'Otro';
+type RotuladaOpcion = 'sin_definir' | 'si' | 'no';
 
 const defaultForm = {
   placas: '',
+  numeroEconomico: '',
   marca: '',
   modelo: '',
   estatus: 'Disponible' as Estatus,
   numeroSerieCaja: '',
+  tieneGps: false,
+  gpsNumero1: '',
+  gpsNumero2: '',
   subestatusDisponible: 'disponible' as SubestatusDisponible,
   ubicacionDisponible: 'lote' as UbicacionDisponible,
   observaciones: '',
-  tipoUnidad: 'remolque_seco' as 'remolque_seco' | 'refrigerado' | 'maquinaria',
+  tipoUnidad: 'remolque_seco' as TipoUnidadCatalogo,
+  gestorFisicoMecanica: '',
+  unidadRotulada: 'sin_definir' as RotuladaOpcion,
 };
 
-const TIPOS_UNIDAD = [
-  { v: 'remolque_seco', l: 'Remolque seco' },
-  { v: 'refrigerado', l: 'Refrigerado' },
-  { v: 'maquinaria', l: 'Mulita' },
-];
+function rotuladaFormToApi(v: RotuladaOpcion): boolean | null {
+  if (v === 'si') return true;
+  if (v === 'no') return false;
+  return null;
+}
+
+function rotuladaApiToForm(v: boolean | null | undefined): RotuladaOpcion {
+  if (v === true) return 'si';
+  if (v === false) return 'no';
+  return 'sin_definir';
+}
+
+function textoRotulada(v: boolean | null | undefined): string {
+  if (v === true) return 'Sí';
+  if (v === false) return 'No';
+  return 'Sin definir';
+}
+
+const EXPEDIENTE_FOTO_LABELS: Record<UnidadExpedienteFotoSlot, string> = {
+  fm_anterior: 'Físico-mecánica (anterior)',
+  fm_vigente: 'Físico-mecánica (vigente)',
+  tarjeta_circulacion: 'Tarjeta de circulación',
+};
+
+function rutaPorExpedienteSlot(u: UnidadRow | null | undefined, slot: UnidadExpedienteFotoSlot): string {
+  if (!u) return '';
+  if (slot === 'fm_anterior') return (u.fmFotoAnteriorRuta ?? '').trim();
+  if (slot === 'fm_vigente') return (u.fmFotoVigenteRuta ?? '').trim();
+  return (u.tarjetaCirculacionRuta ?? '').trim();
+}
 
 const SUBESTATUS_LABEL: Record<SubestatusDisponible, string> = {
   disponible: 'Disponible',
@@ -82,6 +118,12 @@ export function Unidades() {
   const [filtroSubestatus, setFiltroSubestatus] = useState<SubestatusDisponible | 'todos'>('todos');
   const [filtroUbicacion, setFiltroUbicacion] = useState<UbicacionDisponible | 'todos'>('todos');
   const [filtroCliente, setFiltroCliente] = useState('todos');
+  const [filtroGps, setFiltroGps] = useState<'todos' | 'con_gps' | 'sin_gps'>('todos');
+  const [filtroRotulada, setFiltroRotulada] = useState<'todos' | 'si' | 'no' | 'sin_definir'>('todos');
+  const [filtroGestor, setFiltroGestor] = useState<'todos' | 'con_gestor' | 'sin_gestor'>('todos');
+  const [filtroFmAnterior, setFiltroFmAnterior] = useState<'todos' | 'con_foto' | 'sin_foto'>('todos');
+  const [filtroFmVigente, setFiltroFmVigente] = useState<'todos' | 'con_foto' | 'sin_foto'>('todos');
+  const [filtroTarjetaFoto, setFiltroTarjetaFoto] = useState<'todos' | 'con_foto' | 'sin_foto'>('todos');
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -105,6 +147,12 @@ export function Unidades() {
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [nuevaImagenes, setNuevaImagenes] = useState<File[]>([]);
   const [previewUnidadNueva, setPreviewUnidadNueva] = useState<UnidadRow | null>(null);
+  const [expedienteArchivosNueva, setExpedienteArchivosNueva] = useState<{
+    fmAnterior: File | null;
+    fmVigente: File | null;
+    tarjeta: File | null;
+  }>({ fmAnterior: null, fmVigente: null, tarjeta: null });
+  const [expedienteSlotUploading, setExpedienteSlotUploading] = useState<UnidadExpedienteFotoSlot | null>(null);
 
   const { toast } = useNotification();
   const selected = useMemo(
@@ -142,19 +190,85 @@ export function Unidades() {
       const cliente = (u.clienteEnRenta ?? '').trim();
       const byCliente = filtroCliente === 'todos' ? true : cliente.toLowerCase() === filtroCliente.toLowerCase();
       const serieBusqueda = esSeriePlaceholder(u.numeroSerieCaja) ? 'pendiente' : (u.numeroSerieCaja ?? '');
+      const ne = (u.numeroEconomico ?? '').trim();
+      const gps1 = (u.gpsNumero1 ?? '').trim();
+      const gps2 = (u.gpsNumero2 ?? '').trim();
+      const gestor = (u.gestorFisicoMecanica ?? '').trim();
+      const fmAnterior = (u.fmFotoAnteriorRuta ?? '').trim();
+      const fmVigente = (u.fmFotoVigenteRuta ?? '').trim();
+      const tarjeta = (u.tarjetaCirculacionRuta ?? '').trim();
+      const byGps =
+        filtroGps === 'todos'
+          ? true
+          : filtroGps === 'con_gps'
+            ? !!u.tieneGps
+            : !u.tieneGps;
+      const byRotulada =
+        filtroRotulada === 'todos'
+          ? true
+          : filtroRotulada === 'si'
+            ? u.unidadRotulada === true
+            : filtroRotulada === 'no'
+              ? u.unidadRotulada === false
+              : u.unidadRotulada == null;
+      const byGestor =
+        filtroGestor === 'todos'
+          ? true
+          : filtroGestor === 'con_gestor'
+            ? !!gestor
+            : !gestor;
+      const byFmAnterior =
+        filtroFmAnterior === 'todos'
+          ? true
+          : filtroFmAnterior === 'con_foto'
+            ? !!fmAnterior
+            : !fmAnterior;
+      const byFmVigente =
+        filtroFmVigente === 'todos'
+          ? true
+          : filtroFmVigente === 'con_foto'
+            ? !!fmVigente
+            : !fmVigente;
+      const byTarjeta =
+        filtroTarjetaFoto === 'todos'
+          ? true
+          : filtroTarjetaFoto === 'con_foto'
+            ? !!tarjeta
+            : !tarjeta;
       const byText = q
-        ? [u.placas, u.marca, u.modelo, serieBusqueda, cliente].some((x) => x.toLowerCase().includes(q))
+        ? [ne, u.placas, u.marca, u.modelo, serieBusqueda, cliente, gps1, gps2, gestor].some((x) =>
+            x.toLowerCase().includes(q)
+          )
         : true;
       const shouldApplyDisponibleFilters = filtro === 'Disponible' || filtro === 'Todos';
       const shouldApplyClienteFilter = filtro === 'En Renta' || filtro === 'Todos';
       return (
         byStatus &&
         byText &&
+        byGps &&
+        byRotulada &&
+        byGestor &&
+        byFmAnterior &&
+        byFmVigente &&
+        byTarjeta &&
         (shouldApplyDisponibleFilters ? bySubestatus && byUbicacion : true) &&
         (shouldApplyClienteFilter ? byCliente : true)
       );
     });
-  }, [unidades, filtro, filtroSubestatus, filtroUbicacion, filtroCliente, search]);
+  }, [
+    unidades,
+    filtro,
+    filtroSubestatus,
+    filtroUbicacion,
+    filtroCliente,
+    filtroGps,
+    filtroRotulada,
+    filtroGestor,
+    filtroFmAnterior,
+    filtroFmVigente,
+    filtroTarjetaFoto,
+    search,
+  ]);
 
   const clientesEnRenta = useMemo(() => {
     const set = new Set<string>();
@@ -180,8 +294,9 @@ export function Unidades() {
   }
 
   function openNueva() {
-    setFormNueva(defaultForm);
+    setFormNueva({ ...defaultForm });
     setNuevaImagenes([]);
+    setExpedienteArchivosNueva({ fmAnterior: null, fmVigente: null, tarjeta: null });
     setModalNueva(true);
     setError(null);
   }
@@ -189,14 +304,20 @@ export function Unidades() {
   function openEditar(u: UnidadRow) {
     setFormEditar({
       placas: u.placas,
+      numeroEconomico: (u.numeroEconomico ?? '').trim(),
       marca: u.marca,
       modelo: u.modelo,
       estatus: u.estatus,
       numeroSerieCaja: esSeriePlaceholder(u.numeroSerieCaja) ? '' : (u.numeroSerieCaja || ''),
+      tieneGps: !!u.tieneGps,
+      gpsNumero1: (u.gpsNumero1 ?? '').trim(),
+      gpsNumero2: (u.gpsNumero2 ?? '').trim(),
       subestatusDisponible: (u.subestatusDisponible ?? 'disponible') as SubestatusDisponible,
       ubicacionDisponible: (u.ubicacionDisponible ?? 'lote') as UbicacionDisponible,
       observaciones: u.observaciones || '',
-      tipoUnidad: (u.tipoUnidad ?? 'remolque_seco') as 'remolque_seco' | 'refrigerado' | 'maquinaria',
+      tipoUnidad: (u.tipoUnidad ?? 'remolque_seco') as TipoUnidadCatalogo,
+      gestorFisicoMecanica: (u.gestorFisicoMecanica ?? '').trim(),
+      unidadRotulada: rotuladaApiToForm(u.unidadRotulada),
     });
     setModalEditar(true);
     setSelectedId(u.id);
@@ -209,28 +330,45 @@ export function Unidades() {
     setError(null);
     createUnidad({
       placas: formNueva.placas.trim(),
+      numeroEconomico: formNueva.numeroEconomico.trim(),
       marca: formNueva.marca.trim(),
       modelo: formNueva.modelo.trim(),
       estatus: formNueva.estatus,
       numeroSerieCaja: formNueva.numeroSerieCaja.trim(),
+      tieneGps: !!formNueva.tieneGps,
+      gpsNumero1: formNueva.gpsNumero1.trim(),
+      gpsNumero2: formNueva.gpsNumero2.trim(),
       subestatusDisponible: formNueva.subestatusDisponible,
       ubicacionDisponible: formNueva.ubicacionDisponible,
       observaciones: formNueva.observaciones.trim(),
       tipoUnidad: formNueva.tipoUnidad,
+      gestorFisicoMecanica: formNueva.gestorFisicoMecanica.trim(),
+      unidadRotulada: rotuladaFormToApi(formNueva.unidadRotulada),
     })
       .then(async (u) => {
+        let cur = u;
+        if (expedienteArchivosNueva.fmAnterior) {
+          cur = await uploadUnidadExpedienteFoto(cur.id, 'fm_anterior', expedienteArchivosNueva.fmAnterior);
+        }
+        if (expedienteArchivosNueva.fmVigente) {
+          cur = await uploadUnidadExpedienteFoto(cur.id, 'fm_vigente', expedienteArchivosNueva.fmVigente);
+        }
+        if (expedienteArchivosNueva.tarjeta) {
+          cur = await uploadUnidadExpedienteFoto(cur.id, 'tarjeta_circulacion', expedienteArchivosNueva.tarjeta);
+        }
         if (nuevaImagenes.length > 0) {
-          let updated = u;
+          let updated = cur;
           for (const file of nuevaImagenes) {
             updated = await uploadImagenUnidad(updated.id, file, 'Registro inicial');
           }
-          u = updated;
+          cur = updated;
         }
         toast('Unidad creada correctamente');
         load();
         setModalNueva(false);
-        setPreviewUnidadNueva(u);
+        setPreviewUnidadNueva(cur);
         setNuevaImagenes([]);
+        setExpedienteArchivosNueva({ fmAnterior: null, fmVigente: null, tarjeta: null });
       })
       .catch((e) => {
         const msg = e instanceof Error ? e.message : 'Error';
@@ -247,14 +385,20 @@ export function Unidades() {
     setError(null);
     updateUnidad(selectedId, {
       placas: formEditar.placas.trim(),
+      numeroEconomico: formEditar.numeroEconomico.trim(),
       marca: formEditar.marca.trim(),
       modelo: formEditar.modelo.trim(),
       estatus: formEditar.estatus,
       numeroSerieCaja: formEditar.numeroSerieCaja.trim(),
+      tieneGps: !!formEditar.tieneGps,
+      gpsNumero1: formEditar.gpsNumero1.trim(),
+      gpsNumero2: formEditar.gpsNumero2.trim(),
       subestatusDisponible: formEditar.subestatusDisponible,
       ubicacionDisponible: formEditar.ubicacionDisponible,
       observaciones: formEditar.observaciones.trim(),
       tipoUnidad: formEditar.tipoUnidad,
+      gestorFisicoMecanica: formEditar.gestorFisicoMecanica.trim(),
+      unidadRotulada: rotuladaFormToApi(formEditar.unidadRotulada),
     })
       .then((u) => {
         toast('Unidad actualizada');
@@ -267,6 +411,39 @@ export function Unidades() {
         toast(msg, 'error');
       })
       .finally(() => setSavingEditar(false));
+  }
+
+  const unidadEditarSnapshot = useMemo(
+    () => (modalEditar && selectedId ? unidades.find((x) => x.id === selectedId) : null),
+    [modalEditar, selectedId, unidades]
+  );
+
+  async function handleExpedienteFotoEdit(slot: UnidadExpedienteFotoSlot, file: File | null) {
+    if (!file || !selectedId) return;
+    setExpedienteSlotUploading(slot);
+    try {
+      const u = await uploadUnidadExpedienteFoto(selectedId, slot, file);
+      setUnidades((prev) => prev.map((x) => (x.id === u.id ? u : x)));
+      toast('Foto del expediente guardada');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Error al subir', 'error');
+    } finally {
+      setExpedienteSlotUploading(null);
+    }
+  }
+
+  async function handleExpedienteFotoEliminar(slot: UnidadExpedienteFotoSlot) {
+    if (!selectedId) return;
+    setExpedienteSlotUploading(slot);
+    try {
+      const u = await deleteUnidadExpedienteFoto(selectedId, slot);
+      setUnidades((prev) => prev.map((x) => (x.id === u.id ? u : x)));
+      toast('Foto eliminada');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Error al eliminar', 'error');
+    } finally {
+      setExpedienteSlotUploading(null);
+    }
   }
 
   function handleSetEstatus(id: string, next: Estatus) {
@@ -426,7 +603,7 @@ export function Unidades() {
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Placas, marca o modelo…"
+                  placeholder="Núm. económico, placas, marca, modelo…"
                   className="w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 />
               </div>
@@ -507,6 +684,83 @@ export function Unidades() {
             </select>
           </label>
         </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <label className="text-sm font-medium text-gray-700">
+            GPS
+            <select
+              value={filtroGps}
+              onChange={(e) => setFiltroGps(e.target.value as 'todos' | 'con_gps' | 'sin_gps')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todos</option>
+              <option value="con_gps">Con GPS</option>
+              <option value="sin_gps">Sin GPS</option>
+            </select>
+          </label>
+          <label className="text-sm font-medium text-gray-700">
+            Rotulada
+            <select
+              value={filtroRotulada}
+              onChange={(e) => setFiltroRotulada(e.target.value as 'todos' | 'si' | 'no' | 'sin_definir')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todas</option>
+              <option value="si">Sí</option>
+              <option value="no">No</option>
+              <option value="sin_definir">Sin definir</option>
+            </select>
+          </label>
+          <label className="text-sm font-medium text-gray-700">
+            Gestor FM
+            <select
+              value={filtroGestor}
+              onChange={(e) => setFiltroGestor(e.target.value as 'todos' | 'con_gestor' | 'sin_gestor')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todos</option>
+              <option value="con_gestor">Con gestor</option>
+              <option value="sin_gestor">Sin gestor</option>
+            </select>
+          </label>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <label className="text-sm font-medium text-gray-700">
+            FM anterior
+            <select
+              value={filtroFmAnterior}
+              onChange={(e) => setFiltroFmAnterior(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todos</option>
+              <option value="con_foto">Con foto</option>
+              <option value="sin_foto">Sin foto</option>
+            </select>
+          </label>
+          <label className="text-sm font-medium text-gray-700">
+            FM vigente
+            <select
+              value={filtroFmVigente}
+              onChange={(e) => setFiltroFmVigente(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todos</option>
+              <option value="con_foto">Con foto</option>
+              <option value="sin_foto">Sin foto</option>
+            </select>
+          </label>
+          <label className="text-sm font-medium text-gray-700">
+            Tarjeta circulación
+            <select
+              value={filtroTarjetaFoto}
+              onChange={(e) => setFiltroTarjetaFoto(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
+              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+            >
+              <option value="todos">Todos</option>
+              <option value="con_foto">Con foto</option>
+              <option value="sin_foto">Sin foto</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* Table */}
@@ -516,15 +770,17 @@ export function Unidades() {
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-skyline-border border-t-skyline-blue" />
           </div>
         ) : (
-          <table className="min-w-[980px] w-full text-sm">
+          <table className="min-w-[1220px] w-full text-sm">
             <thead>
               <tr className="border-b border-skyline-border bg-skyline-bg">
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Foto</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">No. econ.</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Placas</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Marca</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Modelo</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Serie caja</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Estatus</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">GPS / Rotulada</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Ubicación / Cliente</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Acciones</th>
               </tr>
@@ -549,6 +805,7 @@ export function Unidades() {
                       </div>
                     )}
                   </td>
+                  <td className="px-4 py-3 font-semibold tabular-nums text-gray-900">{(u.numeroEconomico ?? '').trim() || '—'}</td>
                   <td className="px-4 py-3 font-semibold text-gray-900">{u.placas}</td>
                   <td className="px-4 py-3 text-gray-700">{u.marca}</td>
                   <td className="px-4 py-3 text-gray-700">{u.modelo}</td>
@@ -557,6 +814,13 @@ export function Unidades() {
                     <span className={`badge ${statusPill(u.estatus)}`}>{u.estatus}</span>
                     {u.estatus === 'Disponible' && (u.subestatusDisponible ?? 'disponible') !== 'disponible' ? (
                       <p className="mt-1 text-xs text-gray-500">{SUBESTATUS_LABEL[u.subestatusDisponible ?? 'disponible']}</p>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3 text-xs">
+                    <p className="text-gray-700">GPS: <span className="font-semibold">{u.tieneGps ? 'Sí' : 'No'}</span></p>
+                    <p className="text-gray-700">Rotulada: <span className="font-semibold">{textoRotulada(u.unidadRotulada)}</span></p>
+                    {(u.gestorFisicoMecanica ?? '').trim() ? (
+                      <p className="truncate text-gray-500">Gestor: {(u.gestorFisicoMecanica ?? '').trim()}</p>
                     ) : null}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-600">
@@ -607,7 +871,7 @@ export function Unidades() {
               ))}
               {filtered.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-gray-500">
                     {unidades.length === 0
                       ? 'No hay unidades. Haz clic en "Nueva unidad" para agregar la primera.'
                       : 'No hay unidades con esos filtros.'}
@@ -623,7 +887,7 @@ export function Unidades() {
       {modalNueva && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !savingNueva && setModalNueva(false)}>
           <div
-            className="w-full max-w-2xl rounded-xl border border-skyline-border bg-white p-6 shadow-xl"
+            className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-xl border border-skyline-border bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-4 text-lg font-semibold text-gray-900">Nueva unidad</h2>
@@ -638,6 +902,20 @@ export function Unidades() {
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                   required
                 />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
+                Número económico *
+                <input
+                  type="text"
+                  value={formNueva.numeroEconomico}
+                  onChange={(e) => setFormNueva((f) => ({ ...f, numeroEconomico: e.target.value.toUpperCase() }))}
+                  placeholder="Ej. 101, ECO-12, UN-045"
+                  className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  required
+                />
+                <span className="mt-1 block text-xs font-normal text-gray-500">
+                  Identificador operativo único para ubicar la unidad rápido (independiente de las placas).
+                </span>
               </label>
               <div className="grid grid-cols-2 gap-4">
                 <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
@@ -667,10 +945,10 @@ export function Unidades() {
                 Tipo de unidad
                 <select
                   value={formNueva.tipoUnidad}
-                  onChange={(e) => setFormNueva((f) => ({ ...f, tipoUnidad: e.target.value as 'remolque_seco' | 'refrigerado' | 'maquinaria' }))}
+                  onChange={(e) => setFormNueva((f) => ({ ...f, tipoUnidad: e.target.value as TipoUnidadCatalogo }))}
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 >
-                  {TIPOS_UNIDAD.map((t) => (
+                  {TIPOS_UNIDAD_OPCIONES.map((t) => (
                     <option key={t.v} value={t.v}>{t.l}</option>
                   ))}
                 </select>
@@ -701,6 +979,48 @@ export function Unidades() {
                   Sin formato fijo: letras, números y guiones según tu VIN o número de caja. Se guarda en mayúsculas.
                 </span>
               </label>
+              <div className="rounded-md border border-skyline-border p-3 md:col-span-2">
+                <p className="text-sm font-medium text-gray-700">GPS</p>
+                <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={!!formNueva.tieneGps}
+                    onChange={(e) =>
+                      setFormNueva((f) => ({
+                        ...f,
+                        tieneGps: e.target.checked,
+                        gpsNumero1: e.target.checked ? f.gpsNumero1 : '',
+                        gpsNumero2: e.target.checked ? f.gpsNumero2 : '',
+                      }))
+                    }
+                  />
+                  Esta unidad tiene GPS
+                </label>
+                {formNueva.tieneGps ? (
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Núm. económico GPS 1
+                      <input
+                        type="text"
+                        value={formNueva.gpsNumero1}
+                        onChange={(e) => setFormNueva((f) => ({ ...f, gpsNumero1: e.target.value.toUpperCase() }))}
+                        placeholder="Ej. GPS-001"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Núm. económico GPS 2 (opcional)
+                      <input
+                        type="text"
+                        value={formNueva.gpsNumero2}
+                        onChange={(e) => setFormNueva((f) => ({ ...f, gpsNumero2: e.target.value.toUpperCase() }))}
+                        placeholder="Ej. GPS-002"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+              </div>
               {formNueva.estatus === 'Disponible' && (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
                   <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
@@ -729,6 +1049,114 @@ export function Unidades() {
                   </label>
                 </div>
               )}
+              <div className="rounded-md border border-skyline-border bg-skyline-bg/40 p-4 md:col-span-2">
+                <h3 className="text-sm font-semibold text-gray-900">Físico-mecánica, tarjeta de circulación y rotulación</h3>
+                <p className="mt-1 text-xs text-gray-600">
+                  Registra el gestor del trámite, evidencia del FM anterior y del vigente, foto de la tarjeta y si la unidad está rotulada.
+                </p>
+                <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Gestor (renovación físico-mecánica)
+                  <input
+                    type="text"
+                    value={formNueva.gestorFisicoMecanica}
+                    onChange={(e) => setFormNueva((f) => ({ ...f, gestorFisicoMecanica: e.target.value }))}
+                    placeholder="Ej. nombre, proveedor o área interna"
+                    className="rounded-md border border-skyline-border bg-white px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  />
+                </label>
+                <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  ¿Unidad rotulada?
+                  <select
+                    value={formNueva.unidadRotulada}
+                    onChange={(e) => setFormNueva((f) => ({ ...f, unidadRotulada: e.target.value as RotuladaOpcion }))}
+                    className="rounded-md border border-skyline-border bg-white px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  >
+                    <option value="sin_definir">Sin definir</option>
+                    <option value="si">Sí</option>
+                    <option value="no">No</option>
+                  </select>
+                </label>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                    {EXPEDIENTE_FOTO_LABELS.fm_anterior}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        setExpedienteArchivosNueva((p) => ({ ...p, fmAnterior: f }));
+                      }}
+                      className="block w-full text-xs text-gray-600 file:mr-2 file:rounded-md file:border-0 file:bg-skyline-blue file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      {expedienteArchivosNueva.fmAnterior ? (
+                        <>
+                          <span className="text-xs text-gray-600 truncate">{expedienteArchivosNueva.fmAnterior.name}</span>
+                          <button
+                            type="button"
+                            className="shrink-0 text-xs text-red-600"
+                            onClick={() => setExpedienteArchivosNueva((p) => ({ ...p, fmAnterior: null }))}
+                          >
+                            Quitar
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                    {EXPEDIENTE_FOTO_LABELS.fm_vigente}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        setExpedienteArchivosNueva((p) => ({ ...p, fmVigente: f }));
+                      }}
+                      className="block w-full text-xs text-gray-600 file:mr-2 file:rounded-md file:border-0 file:bg-skyline-blue file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      {expedienteArchivosNueva.fmVigente ? (
+                        <>
+                          <span className="text-xs text-gray-600 truncate">{expedienteArchivosNueva.fmVigente.name}</span>
+                          <button
+                            type="button"
+                            className="shrink-0 text-xs text-red-600"
+                            onClick={() => setExpedienteArchivosNueva((p) => ({ ...p, fmVigente: null }))}
+                          >
+                            Quitar
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm font-medium text-gray-700 sm:col-span-2">
+                    {EXPEDIENTE_FOTO_LABELS.tarjeta_circulacion}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        setExpedienteArchivosNueva((p) => ({ ...p, tarjeta: f }));
+                      }}
+                      className="block w-full text-xs text-gray-600 file:mr-2 file:rounded-md file:border-0 file:bg-skyline-blue file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      {expedienteArchivosNueva.tarjeta ? (
+                        <>
+                          <span className="text-xs text-gray-600 truncate">{expedienteArchivosNueva.tarjeta.name}</span>
+                          <button
+                            type="button"
+                            className="shrink-0 text-xs text-red-600"
+                            onClick={() => setExpedienteArchivosNueva((p) => ({ ...p, tarjeta: null }))}
+                          >
+                            Quitar
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </label>
+                </div>
+              </div>
               <div className="rounded-md border border-skyline-border p-3 md:col-span-2">
                 <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                   Imágenes al registrar
@@ -778,7 +1206,7 @@ export function Unidades() {
       {modalEditar && selectedId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !savingEditar && setModalEditar(false)}>
           <div
-            className="w-full max-w-2xl rounded-xl border border-skyline-border bg-white p-6 shadow-xl"
+            className="w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-xl border border-skyline-border bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="mb-4 text-lg font-semibold text-gray-900">Editar unidad</h2>
@@ -787,10 +1215,10 @@ export function Unidades() {
                 Tipo de unidad
                 <select
                   value={formEditar.tipoUnidad}
-                  onChange={(e) => setFormEditar((f) => ({ ...f, tipoUnidad: e.target.value as 'remolque_seco' | 'refrigerado' | 'maquinaria' }))}
+                  onChange={(e) => setFormEditar((f) => ({ ...f, tipoUnidad: e.target.value as TipoUnidadCatalogo }))}
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 >
-                  {TIPOS_UNIDAD.map((t) => (
+                  {TIPOS_UNIDAD_OPCIONES.map((t) => (
                     <option key={t.v} value={t.v}>{t.l}</option>
                   ))}
                 </select>
@@ -801,6 +1229,16 @@ export function Unidades() {
                   type="text"
                   value={formEditar.placas}
                   onChange={(e) => setFormEditar((f) => ({ ...f, placas: e.target.value.toUpperCase() }))}
+                  className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  required
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
+                Número económico *
+                <input
+                  type="text"
+                  value={formEditar.numeroEconomico}
+                  onChange={(e) => setFormEditar((f) => ({ ...f, numeroEconomico: e.target.value.toUpperCase() }))}
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                   required
                 />
@@ -852,6 +1290,48 @@ export function Unidades() {
                   Mismo criterio que en el alta. Si antes aparecía «Pendiente», aquí va el número real de la caja.
                 </span>
               </label>
+              <div className="rounded-md border border-skyline-border p-3 md:col-span-2">
+                <p className="text-sm font-medium text-gray-700">GPS</p>
+                <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={!!formEditar.tieneGps}
+                    onChange={(e) =>
+                      setFormEditar((f) => ({
+                        ...f,
+                        tieneGps: e.target.checked,
+                        gpsNumero1: e.target.checked ? f.gpsNumero1 : '',
+                        gpsNumero2: e.target.checked ? f.gpsNumero2 : '',
+                      }))
+                    }
+                  />
+                  Esta unidad tiene GPS
+                </label>
+                {formEditar.tieneGps ? (
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Núm. económico GPS 1
+                      <input
+                        type="text"
+                        value={formEditar.gpsNumero1}
+                        onChange={(e) => setFormEditar((f) => ({ ...f, gpsNumero1: e.target.value.toUpperCase() }))}
+                        placeholder="Ej. GPS-001"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Núm. económico GPS 2 (opcional)
+                      <input
+                        type="text"
+                        value={formEditar.gpsNumero2}
+                        onChange={(e) => setFormEditar((f) => ({ ...f, gpsNumero2: e.target.value.toUpperCase() }))}
+                        placeholder="Ej. GPS-002"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+              </div>
               {formEditar.estatus === 'Disponible' && (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
                   <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
@@ -880,6 +1360,135 @@ export function Unidades() {
                   </label>
                 </div>
               )}
+              <div className="rounded-md border border-skyline-border bg-skyline-bg/40 p-4 md:col-span-2">
+                <h3 className="text-sm font-semibold text-gray-900">Físico-mecánica, tarjeta de circulación y rotulación</h3>
+                <p className="mt-1 text-xs text-gray-600">
+                  Los cambios de texto se guardan con «Guardar». Las fotos se suben al elegir archivo (reemplazan la anterior).
+                </p>
+                <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Gestor (renovación físico-mecánica)
+                  <input
+                    type="text"
+                    value={formEditar.gestorFisicoMecanica}
+                    onChange={(e) => setFormEditar((f) => ({ ...f, gestorFisicoMecanica: e.target.value }))}
+                    placeholder="Ej. nombre, proveedor o área interna"
+                    className="rounded-md border border-skyline-border bg-white px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  />
+                </label>
+                <label className="mt-3 flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  ¿Unidad rotulada?
+                  <select
+                    value={formEditar.unidadRotulada}
+                    onChange={(e) => setFormEditar((f) => ({ ...f, unidadRotulada: e.target.value as RotuladaOpcion }))}
+                    className="rounded-md border border-skyline-border bg-white px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  >
+                    <option value="sin_definir">Sin definir</option>
+                    <option value="si">Sí</option>
+                    <option value="no">No</option>
+                  </select>
+                </label>
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  {(['fm_anterior', 'fm_vigente'] as const).map((slot) => {
+                    const ruta = rutaPorExpedienteSlot(unidadEditarSnapshot, slot);
+                    const busy = expedienteSlotUploading === slot;
+                    return (
+                      <div key={slot} className="rounded-md border border-skyline-border bg-white p-3">
+                        <p className="text-sm font-medium text-gray-800">{EXPEDIENTE_FOTO_LABELS[slot]}</p>
+                        {ruta ? (
+                          <button
+                            type="button"
+                            onClick={() => setLightboxImg(getImagenUrl(ruta))}
+                            className="mt-2 block w-full overflow-hidden rounded-md border border-skyline-border"
+                          >
+                            <img
+                              src={getImagenUrl(ruta)}
+                              alt=""
+                              className="max-h-28 w-full object-cover"
+                            />
+                          </button>
+                        ) : (
+                          <p className="mt-2 text-xs text-gray-500">Sin foto</p>
+                        )}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <label className="text-xs font-semibold text-skyline-blue cursor-pointer">
+                            {busy ? 'Subiendo…' : ruta ? 'Cambiar' : 'Subir'}
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/gif,image/webp"
+                              disabled={busy || savingEditar}
+                              className="sr-only"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                e.target.value = '';
+                                if (f) void handleExpedienteFotoEdit(slot, f);
+                              }}
+                            />
+                          </label>
+                          {ruta ? (
+                            <button
+                              type="button"
+                              disabled={busy || savingEditar}
+                              className="text-xs font-semibold text-red-600 disabled:opacity-50"
+                              onClick={() => void handleExpedienteFotoEliminar(slot)}
+                            >
+                              Quitar
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="rounded-md border border-skyline-border bg-white p-3 sm:col-span-2">
+                    <p className="text-sm font-medium text-gray-800">{EXPEDIENTE_FOTO_LABELS.tarjeta_circulacion}</p>
+                    {(() => {
+                      const slot = 'tarjeta_circulacion' as const;
+                      const ruta = rutaPorExpedienteSlot(unidadEditarSnapshot, slot);
+                      const busy = expedienteSlotUploading === slot;
+                      return (
+                        <>
+                          {ruta ? (
+                            <button
+                              type="button"
+                              onClick={() => setLightboxImg(getImagenUrl(ruta))}
+                              className="mt-2 block w-full overflow-hidden rounded-md border border-skyline-border"
+                            >
+                              <img src={getImagenUrl(ruta)} alt="" className="max-h-36 w-full object-contain bg-gray-50" />
+                            </button>
+                          ) : (
+                            <p className="mt-2 text-xs text-gray-500">Sin foto</p>
+                          )}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <label className="text-xs font-semibold text-skyline-blue cursor-pointer">
+                              {busy ? 'Subiendo…' : ruta ? 'Cambiar' : 'Subir'}
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/gif,image/webp"
+                                disabled={busy || savingEditar}
+                                className="sr-only"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  e.target.value = '';
+                                  if (f) void handleExpedienteFotoEdit(slot, f);
+                                }}
+                              />
+                            </label>
+                            {ruta ? (
+                              <button
+                                type="button"
+                                disabled={busy || savingEditar}
+                                className="text-xs font-semibold text-red-600 disabled:opacity-50"
+                                onClick={() => void handleExpedienteFotoEliminar(slot)}
+                              >
+                                Quitar
+                              </button>
+                            ) : null}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Observaciones
                 <textarea
@@ -915,7 +1524,11 @@ export function Unidades() {
                       <Icon icon="mdi:car-side" className="size-5" aria-hidden />
                     </div>
                     <div>
-                      <h2 className="text-lg font-semibold text-gray-900">Unidad {selected.placas}</h2>
+                      <h2 className="text-lg font-semibold text-gray-900">
+                        {(selected.numeroEconomico ?? '').trim()
+                          ? `${(selected.numeroEconomico ?? '').trim()} · ${selected.placas}`
+                          : `Unidad ${selected.placas}`}
+                      </h2>
                       <p className="mt-0.5 text-sm font-medium text-gray-500">
                         {selected.marca} · {selected.modelo}
                       </p>
@@ -926,6 +1539,14 @@ export function Unidades() {
                     <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
                       Serie: {textoSerieCrud(selected.numeroSerieCaja)}
                     </span>
+                    <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                      GPS: {selected.tieneGps ? 'Sí' : 'No'}
+                    </span>
+                    {selected.tieneGps && (selected.gpsNumero1 || selected.gpsNumero2) ? (
+                      <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                        GPS Econ.: {[selected.gpsNumero1, selected.gpsNumero2].filter(Boolean).join(' · ')}
+                      </span>
+                    ) : null}
                     {selected.estatus === 'Disponible' ? (
                       <>
                         <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
@@ -1034,6 +1655,48 @@ export function Unidades() {
                       onBlur={(e) => handleUpdateObservaciones(selected.id, e.target.value)}
                       className="mt-3 min-h-[90px] w-full resize-none rounded-md border border-skyline-border px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                     />
+                  </div>
+
+                  <div className="rounded-lg border border-skyline-border bg-white p-4 shadow-sm">
+                    <h3 className="text-sm font-semibold text-gray-900">Físico-mecánica y circulación</h3>
+                    <p className="mt-1 text-xs font-medium text-gray-500">
+                      Gestor, rotulación y fotos se editan desde «Editar unidad».
+                    </p>
+                    <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-gray-500">Gestor</dt>
+                        <dd className="font-medium text-gray-900 text-right">
+                          {(selected.gestorFisicoMecanica ?? '').trim() || '—'}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-gray-500">Rotulada</dt>
+                        <dd className="font-medium text-gray-900">{textoRotulada(selected.unidadRotulada)}</dd>
+                      </div>
+                    </dl>
+                    <div className="mt-4 grid grid-cols-3 gap-2">
+                      {(['fm_anterior', 'fm_vigente', 'tarjeta_circulacion'] as const).map((slot) => {
+                        const ruta = rutaPorExpedienteSlot(selected, slot);
+                        return (
+                          <div key={slot} className="rounded-md border border-skyline-border bg-skyline-bg/50 p-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                              {slot === 'tarjeta_circulacion' ? 'Tarjeta' : slot === 'fm_anterior' ? 'FM ant.' : 'FM vig.'}
+                            </p>
+                            {ruta ? (
+                              <button
+                                type="button"
+                                onClick={() => setLightboxImg(getImagenUrl(ruta))}
+                                className="mt-1 block w-full overflow-hidden rounded border border-skyline-border"
+                              >
+                                <img src={getImagenUrl(ruta)} alt="" className="h-16 w-full object-cover" />
+                              </button>
+                            ) : (
+                              <p className="mt-1 text-xs text-gray-400">Sin foto</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div className="rounded-lg border border-skyline-border bg-white p-4 shadow-sm">
@@ -1279,9 +1942,17 @@ export function Unidades() {
             <p className="mt-1 text-sm text-gray-500">Revisa los datos antes de entrar al expediente completo.</p>
             <div className="mt-4 rounded-lg border border-skyline-border bg-skyline-bg p-4">
               <p className="text-base font-semibold text-gray-900">
-                {previewUnidadNueva.placas} · {previewUnidadNueva.marca} {previewUnidadNueva.modelo}
+                {(previewUnidadNueva.numeroEconomico ?? '').trim()
+                  ? `${(previewUnidadNueva.numeroEconomico ?? '').trim()} · ${previewUnidadNueva.placas} · ${previewUnidadNueva.marca} ${previewUnidadNueva.modelo}`
+                  : `${previewUnidadNueva.placas} · ${previewUnidadNueva.marca} ${previewUnidadNueva.modelo}`}
               </p>
               <p className="mt-1 text-sm text-gray-600">Serie: {textoSerieCrud(previewUnidadNueva.numeroSerieCaja)}</p>
+              <p className="mt-1 text-sm text-gray-600">
+                GPS: {previewUnidadNueva.tieneGps ? 'Sí' : 'No'}
+                {previewUnidadNueva.tieneGps
+                  ? ` · ${[previewUnidadNueva.gpsNumero1, previewUnidadNueva.gpsNumero2].filter(Boolean).join(' · ') || 'Sin número capturado'}`
+                  : ''}
+              </p>
               <p className="mt-1 text-sm text-gray-600">
                 Estatus: {previewUnidadNueva.estatus}
                 {previewUnidadNueva.estatus === 'Disponible'

@@ -14,6 +14,7 @@ import {
   type UnidadRow,
 } from '../api/client';
 import { useNotification } from '../context/NotificationContext';
+import { etiquetaUnidadLista } from '../lib/unidadDisplay';
 import { descargarFacturaProveedorPdf } from '../lib/facturaProveedorPdf';
 
 function fmtMoney(n: number) {
@@ -545,9 +546,13 @@ export function ProveedorDetalle() {
                 {(prov.mantenimientos ?? []).map((row) => (
                   <tr key={row.id} className="border-b border-skyline-border/80 last:border-0">
                     <td className="px-3 py-2 font-medium text-gray-900">
-                      {row.placas || row.unidadId}
-                      <span className="block text-xs font-normal text-gray-500">
-                        {row.marca} {row.modelo}
+                      <span className="block">
+                        {etiquetaUnidadLista({
+                          numeroEconomico: row.numeroEconomico ?? '',
+                          placas: row.placas || row.unidadId,
+                          marca: row.marca,
+                          modelo: row.modelo,
+                        })}
                       </span>
                     </td>
                     <td className="px-3 py-2 capitalize text-gray-700">{row.tipo}</td>

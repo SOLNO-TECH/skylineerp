@@ -16,12 +16,24 @@ import {
   type ClienteListRow,
 } from '../api/client';
 import { MapPicker } from '../components/MapPicker';
+import { etiquetaUnidadLista } from '../lib/unidadDisplay';
+import {
+  TIPOS_UNIDAD_OPCIONES,
+  esTipoRefrigeradoCatalogo,
+  labelTipoUnidad,
+} from '../lib/tipoUnidadCatalogo';
 
 const DIAS_SEMANA = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const COLOR_POR_TIPO: Record<string, string> = {
   remolque_seco: 'bg-sky-100 text-sky-800',
   refrigerado: 'bg-cyan-100 text-cyan-800',
   maquinaria: 'bg-amber-100 text-amber-800',
+  dolly: 'bg-violet-100 text-violet-900',
+  plataforma: 'bg-indigo-100 text-indigo-900',
+  camion: 'bg-orange-100 text-orange-900',
+  vehiculo_empresarial: 'bg-emerald-100 text-emerald-900',
+  caja_refrigerada_sin_termo: 'bg-teal-100 text-teal-900',
+  pickup: 'bg-lime-100 text-lime-900',
 };
 const ESTADOS: Record<string, { label: string; color: string }> = {
   reservada: { label: 'Reservada', color: 'bg-amber-100 text-amber-800' },
@@ -85,12 +97,6 @@ const ESTADOS_LOG_OPT = [
   { v: 'entregado', l: 'Entregado' },
   { v: 'finalizado', l: 'Finalizado' },
 ];
-const TIPOS_UNIDAD_LABEL: Record<string, string> = {
-  remolque_seco: 'Remolque',
-  refrigerado: 'Refrigerado',
-  maquinaria: 'Mulita',
-};
-
 export function Rentas() {
   const navigate = useNavigate();
   const { toast } = useNotification();
@@ -320,7 +326,7 @@ export function Rentas() {
         extras: ex,
         operadorAsignado: form.operadorAsignado.trim(),
       };
-      if (unidadSeleccionada?.tipoUnidad === 'refrigerado') {
+      if (esTipoRefrigeradoCatalogo(unidadSeleccionada?.tipoUnidad)) {
         payload.refrigerado = {
           temperaturaObjetivo: parseFloat(form.refTemp) || 0,
           combustibleInicio: parseInt(form.refCombI, 10) || 0,
@@ -491,9 +497,9 @@ export function Rentas() {
                                         type="button"
                                         onClick={() => navigate(`/rentas/${r.id}`)}
                                         className={`block w-full truncate rounded px-1 py-0.5 text-left text-xs ${COLOR_POR_TIPO[r.tipoUnidad ?? 'remolque_seco'] ?? ESTADOS[r.estado]?.color ?? 'bg-gray-100'} hover:opacity-90`}
-                                        title={`${r.placas} - ${r.clienteNombre}`}
+                                        title={`${(r.numeroEconomico ?? '').trim() ? `${(r.numeroEconomico ?? '').trim()} · ` : ''}${r.placas} - ${r.clienteNombre}`}
                                       >
-                                        {r.placas}
+                                        {(r.numeroEconomico ?? '').trim() || r.placas}
                                       </button>
                                     ))}
                                     {rentasDelDia.length > 2 && (
@@ -531,9 +537,11 @@ export function Rentas() {
                   onClick={() => navigate(`/rentas/${r.id}`)}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-gray-900">{r.placas}</span>
+                    <span className="font-semibold text-gray-900">
+                      {(r.numeroEconomico ?? '').trim() ? `${(r.numeroEconomico ?? '').trim()} · ${r.placas}` : r.placas}
+                    </span>
                     <span className={`rounded px-1.5 py-0.5 text-xs ${COLOR_POR_TIPO[r.tipoUnidad ?? 'remolque_seco'] ?? 'bg-gray-100'}`}>
-                      {TIPOS_UNIDAD_LABEL[r.tipoUnidad ?? 'remolque_seco'] ?? r.tipoUnidad}
+                      {labelTipoUnidad(r.tipoUnidad)}
                     </span>
                   </div>
                   <span className="text-sm text-gray-600">{r.clienteNombre}</span>
@@ -657,9 +665,11 @@ export function Rentas() {
                     className="input w-full rounded-lg py-2 text-sm shadow-sm"
                   >
                     <option value="">Todos</option>
-                    <option value="remolque_seco">Remolque</option>
-                    <option value="refrigerado">Refrigerado</option>
-                    <option value="maquinaria">Mulita</option>
+                    {TIPOS_UNIDAD_OPCIONES.map((o) => (
+                      <option key={o.v} value={o.v}>
+                        {o.l}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -710,10 +720,19 @@ export function Rentas() {
                     className="cursor-pointer transition hover:bg-skyline-blue/[0.04]"
                     onClick={() => navigate(`/rentas/${r.id}`)}
                   >
-                    <td className="px-3 py-2.5 font-medium text-gray-900">{r.placas}</td>
+                    <td className="px-3 py-2.5 font-medium text-gray-900">
+                      {(r.numeroEconomico ?? '').trim() ? (
+                        <>
+                          <span className="block font-semibold tabular-nums">{(r.numeroEconomico ?? '').trim()}</span>
+                          <span className="text-xs font-normal text-gray-600">{r.placas}</span>
+                        </>
+                      ) : (
+                        r.placas
+                      )}
+                    </td>
                     <td className="px-3 py-2.5">
                       <span className={`rounded px-1.5 py-0.5 text-xs ${COLOR_POR_TIPO[r.tipoUnidad ?? 'remolque_seco'] ?? 'bg-gray-100'}`}>
-                        {TIPOS_UNIDAD_LABEL[r.tipoUnidad ?? 'remolque_seco'] ?? '-'}
+                        {labelTipoUnidad(r.tipoUnidad)}
                       </span>
                     </td>
                     <td className="px-3 py-2.5">{r.clienteNombre}</td>
@@ -782,7 +801,7 @@ export function Rentas() {
                     )
                     .map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.placas} – {u.marca} {u.modelo}
+                        {etiquetaUnidadLista(u)}
                         {u.estatus !== 'Disponible' ? ` (${u.estatus})` : ''}
                       </option>
                     ))}
@@ -964,7 +983,7 @@ export function Rentas() {
                   />
                 </div>
               )}
-              {unidadSeleccionada?.tipoUnidad === 'refrigerado' && (
+              {esTipoRefrigeradoCatalogo(unidadSeleccionada?.tipoUnidad) && (
                 <div className="rounded border border-skyline-border p-3">
                   <h4 className="mb-2 text-sm font-semibold text-gray-700">Datos refrigerado</h4>
                   <div className="grid grid-cols-2 gap-2">

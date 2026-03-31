@@ -1,3 +1,5 @@
+import { sugerenciaModalidadCheckin } from './tipoUnidadCatalogo';
+
 /** Estados tipo hoja física: ✔ / X / N/A */
 export type Tri = '' | 'ok' | 'mal' | 'na';
 
@@ -496,7 +498,5 @@ export function mergeInspeccionGuardada(raw: unknown): InspeccionCompleta {
 }
 
 export function defaultModalidadPorTipoUnidad(tipoUnidad?: string): ModalidadInspeccion {
-  if (tipoUnidad === 'refrigerado') return 'refrigerado';
-  if (tipoUnidad === 'maquinaria') return 'mulita_patio';
-  return 'caja_seca';
+  return sugerenciaModalidadCheckin(tipoUnidad);
 }

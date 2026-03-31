@@ -32,6 +32,8 @@ import {
   type Tri,
   type MulitaSeccionDef,
 } from '../lib/checkinInspeccion';
+import { labelTipoUnidad, tipoUnidadSufijoOpcion } from '../lib/tipoUnidadCatalogo';
+import { etiquetaUnidadLista } from '../lib/unidadDisplay';
 
 const ROLES_COLABORADOR = [
   { v: '', l: 'Sin especificar' },
@@ -205,6 +207,7 @@ function textoBusquedaRegistro(r: CheckinOutRegistro): string {
   const tipoTxt =     r.tipo === 'checkin' ? 'check-in checkin entrada recepción' : 'check-out checkout salida entrega';
   const mod = r.modalidad ? MODALIDAD_LABEL[r.modalidad] : '';
   return [
+    r.numeroEconomico,
     r.placas,
     r.marca,
     r.modelo,
@@ -344,15 +347,11 @@ export function CheckInOut() {
       setCombustiblePct(String(unidadSel.combustiblePct ?? ''));
       setModalidad(defaultModalidadPorTipoUnidad(unidadSel.tipoUnidad));
       const fresh = defaultInspeccionCompleta();
+      fresh.header.nEconomico = (unidadSel.numeroEconomico ?? '').trim();
       fresh.header.hojaPlacas = unidadSel.placas || '';
       fresh.header.hojaKm = String(unidadSel.kilometraje ?? '');
       fresh.header.hojaMarca = unidadSel.marca || '';
-      fresh.header.hojaTipo =
-        unidadSel.tipoUnidad === 'refrigerado'
-          ? 'Refrigerado'
-          : unidadSel.tipoUnidad === 'maquinaria'
-            ? 'Mulita'
-            : 'Caja seca / remolque';
+      fresh.header.hojaTipo = labelTipoUnidad(unidadSel.tipoUnidad);
       setInspeccion(fresh);
     }
   }, [unidadSel?.id, unidadSel?.tipoUnidad, editandoId, modalTipo]);
@@ -431,7 +430,7 @@ export function CheckInOut() {
     if (soloLectura) return;
     if (
       !confirm(
-        `¿Eliminar el ${reg.tipo === 'checkin' ? 'check-in' : 'check-out'} de ${reg.placas}? Esta acción no se puede deshacer.`
+        `¿Eliminar el ${reg.tipo === 'checkin' ? 'check-in' : 'check-out'} de ${(reg.numeroEconomico ?? '').trim() || reg.placas} (${reg.placas})? Esta acción no se puede deshacer.`
       )
     ) {
       return;
@@ -689,7 +688,7 @@ export function CheckInOut() {
                 <option value="">Todas</option>
                 {unidades.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.placas} — {u.marca} {u.modelo}
+                    {etiquetaUnidadLista(u)}
                   </option>
                 ))}
               </select>
@@ -776,10 +775,23 @@ export function CheckInOut() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="font-mono text-base font-bold tracking-wide text-slate-900">{r.placas}</span>
-                      <span className="mt-0.5 block text-xs text-slate-600">
-                        {r.marca} {r.modelo}
-                      </span>
+                      {(r.numeroEconomico ?? '').trim() ? (
+                        <>
+                          <span className="font-mono text-base font-bold tracking-wide text-slate-900">
+                            {(r.numeroEconomico ?? '').trim()}
+                          </span>
+                          <span className="mt-0.5 block text-xs text-slate-600">
+                            {r.placas} · {r.marca} {r.modelo}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-mono text-base font-bold tracking-wide text-slate-900">{r.placas}</span>
+                          <span className="mt-0.5 block text-xs text-slate-600">
+                            {r.marca} {r.modelo}
+                          </span>
+                        </>
+                      )}
                     </td>
                     <td className="max-w-[180px] px-4 py-3 text-slate-600">
                       {r.rentaCliente ? (
@@ -894,7 +906,14 @@ export function CheckInOut() {
                 {unidadSel ? (
                   <div className="shrink-0 rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-right shadow-lg backdrop-blur-sm">
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-white/70">Unidad</p>
-                    <p className="font-mono text-xl font-bold tracking-wide">{unidadSel.placas}</p>
+                    {(unidadSel.numeroEconomico ?? '').trim() ? (
+                      <>
+                        <p className="font-mono text-xl font-bold tracking-wide">{(unidadSel.numeroEconomico ?? '').trim()}</p>
+                        <p className="font-mono text-sm font-semibold text-white/90">{unidadSel.placas}</p>
+                      </>
+                    ) : (
+                      <p className="font-mono text-xl font-bold tracking-wide">{unidadSel.placas}</p>
+                    )}
                     <p className="text-sm text-white/85">
                       {unidadSel.marca} {unidadSel.modelo}
                     </p>
@@ -906,14 +925,9 @@ export function CheckInOut() {
               <Icon icon="mdi:clipboard-list-outline" className="hidden size-4 text-slate-400 sm:block" aria-hidden />
               <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Resumen</span>
               <ModalidadPill m={modalidad} />
-              {unidadSel?.tipoUnidad === 'refrigerado' ? (
-                <span className="rounded-md bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-900">
-                  Catálogo: refrigerado
-                </span>
-              ) : null}
-              {unidadSel?.tipoUnidad === 'maquinaria' ? (
-                <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-950">
-                  Catálogo: mulita
+              {unidadSel?.tipoUnidad && unidadSel.tipoUnidad !== 'remolque_seco' ? (
+                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-800">
+                  Catálogo: {labelTipoUnidad(unidadSel.tipoUnidad)}
                 </span>
               ) : null}
             </div>
@@ -960,8 +974,8 @@ export function CheckInOut() {
                   <option value="">Seleccionar…</option>
                   {unidades.map((u) => (
                     <option key={u.id} value={u.id}>
-                      {u.placas} — {u.marca} {u.modelo} ({u.estatus})
-                      {u.tipoUnidad === 'refrigerado' ? ' · Ref.' : u.tipoUnidad === 'maquinaria' ? ' · Mul.' : ''}
+                      {etiquetaUnidadLista(u)} ({u.estatus})
+                      {tipoUnidadSufijoOpcion(u.tipoUnidad)}
                     </option>
                   ))}
                 </select>

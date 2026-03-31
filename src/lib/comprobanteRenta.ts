@@ -1,18 +1,13 @@
 import type { RentaRow, PagoRow } from '../api/client';
 import { downloadHtmlAsPdf } from './htmlToPdfDownload';
 import { svgLogoSkyline } from './pdfSkylineBrand';
+import { labelTipoUnidad } from './tipoUnidadCatalogo';
 
 const ESTADOS_RENTA: Record<string, string> = {
   reservada: 'Reservada',
   activa: 'Activa',
   finalizada: 'Finalizada',
   cancelada: 'Cancelada',
-};
-
-const TIPOS_UNIDAD: Record<string, string> = {
-  remolque_seco: 'Remolque seco',
-  refrigerado: 'Refrigerado',
-  maquinaria: 'Mulita',
 };
 
 const TIPOS_SERVICIO: Record<string, string> = {
@@ -91,7 +86,7 @@ function buildDocumentHtml(renta: RentaRow): string {
     : '<tr><td colspan="6" style="color:#6c757d;font-style:italic;">Sin pagos registrados en el sistema.</td></tr>';
 
   const tipoUnidadLabel = renta.tipoUnidad
-    ? esc(TIPOS_UNIDAD[renta.tipoUnidad] || renta.tipoUnidad)
+    ? esc(labelTipoUnidad(renta.tipoUnidad))
     : '—';
 
   const ref = renta.refrigerado;
@@ -295,7 +290,9 @@ function buildDocumentHtml(renta: RentaRow): string {
       <div class="logo-wrap">${svgLogoSkyline()}</div>
       <div class="head-title">
         <h1>Comprobante de expediente de renta</h1>
-        <p class="doc-id">Expediente #${esc(renta.id)} · ${esc(renta.placas)}</p>
+        <p class="doc-id">Expediente #${esc(renta.id)} · ${esc(
+          (renta.numeroEconomico ?? '').trim() ? `${(renta.numeroEconomico ?? '').trim()} · ${renta.placas}` : renta.placas
+        )}</p>
         <span class="badge">${esc(estadoLabel)}</span>
       </div>
     </div>
@@ -327,6 +324,7 @@ function buildDocumentHtml(renta: RentaRow): string {
         <h2>Unidad</h2>
         <dl>
           <dt>Tipo</dt><dd>${tipoUnidadLabel}</dd>
+          ${(renta.numeroEconomico ?? '').trim() ? `<dt>Núm. económico</dt><dd>${esc((renta.numeroEconomico ?? '').trim())}</dd>` : ''}
           <dt>Placas</dt><dd>${esc(renta.placas)}</dd>
           <dt>Vehículo</dt><dd>${esc(`${renta.marca || ''} ${renta.modelo || ''}`.trim() || '—')}</dd>
           <dt>Operador asignado</dt><dd>${esc(renta.operadorAsignado)}</dd>

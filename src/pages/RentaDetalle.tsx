@@ -12,18 +12,13 @@ import {
 import { Icon } from '@iconify/react';
 import { MapRoute } from '../components/MapRoute';
 import { descargarComprobanteRentaPdf } from '../lib/comprobanteRenta';
+import { labelTipoUnidad } from '../lib/tipoUnidadCatalogo';
 
 const ESTADOS: Record<string, { label: string; color: string }> = {
   reservada: { label: 'Reservada', color: 'bg-amber-100 text-amber-800' },
   activa: { label: 'Activa', color: 'bg-emerald-100 text-emerald-800' },
   finalizada: { label: 'Finalizada', color: 'bg-slate-100 text-slate-600' },
   cancelada: { label: 'Cancelada', color: 'bg-red-100 text-red-800' },
-};
-
-const TIPOS_UNIDAD: Record<string, string> = {
-  remolque_seco: 'Remolque seco',
-  refrigerado: 'Refrigerado',
-  maquinaria: 'Mulita',
 };
 
 const TIPOS_SERVICIO: Record<string, string> = {
@@ -166,7 +161,7 @@ export function RentaDetalle() {
         </button>
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold text-gray-900">
-            Expediente #{renta.id} · {renta.placas}
+            Expediente #{renta.id} · {(renta.numeroEconomico ?? '').trim() ? `${(renta.numeroEconomico ?? '').trim()} · ${renta.placas}` : renta.placas}
           </h1>
           <p className="text-sm text-gray-500">{renta.clienteNombre} · {formatearFecha(renta.fechaInicio)} → {formatearFecha(renta.fechaFin)}</p>
         </div>
@@ -227,9 +222,11 @@ export function RentaDetalle() {
                 Unidad
               </h3>
               <p className="font-semibold text-gray-900">
-                {renta.placas} · {renta.marca} {renta.modelo}
+                {(renta.numeroEconomico ?? '').trim()
+                  ? `${(renta.numeroEconomico ?? '').trim()} · ${renta.placas} · ${renta.marca} ${renta.modelo}`
+                  : `${renta.placas} · ${renta.marca} ${renta.modelo}`}
               </p>
-              <p className="mt-1 text-sm text-gray-600">{TIPOS_UNIDAD[renta.tipoUnidad ?? 'remolque_seco']}</p>
+              <p className="mt-1 text-sm text-gray-600">{labelTipoUnidad(renta.tipoUnidad)}</p>
               <p className="mt-2 text-xs text-gray-500">ID unidad: {renta.unidadId}</p>
             </div>
             <div className="rounded-lg border border-skyline-border p-4">

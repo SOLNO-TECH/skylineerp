@@ -257,6 +257,22 @@ function migrarUnidades() {
     if (!cols.includes('numero_serie_caja')) db.exec("ALTER TABLE unidades ADD COLUMN numero_serie_caja TEXT DEFAULT ''");
     if (!cols.includes('subestatus_disponible')) db.exec("ALTER TABLE unidades ADD COLUMN subestatus_disponible TEXT DEFAULT 'disponible'");
     if (!cols.includes('ubicacion_disponible')) db.exec("ALTER TABLE unidades ADD COLUMN ubicacion_disponible TEXT DEFAULT 'lote'");
+    if (!cols.includes('numero_economico')) {
+      db.exec("ALTER TABLE unidades ADD COLUMN numero_economico TEXT DEFAULT ''");
+      db.exec("UPDATE unidades SET numero_economico = 'ECO-' || id WHERE TRIM(COALESCE(numero_economico, '')) = ''");
+    }
+    if (!cols.includes('tiene_gps')) db.exec('ALTER TABLE unidades ADD COLUMN tiene_gps INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('gps_numero_1')) db.exec("ALTER TABLE unidades ADD COLUMN gps_numero_1 TEXT DEFAULT ''");
+    if (!cols.includes('gps_numero_2')) db.exec("ALTER TABLE unidades ADD COLUMN gps_numero_2 TEXT DEFAULT ''");
+    if (!cols.includes('gestor_fisico_mecanica')) {
+      db.exec("ALTER TABLE unidades ADD COLUMN gestor_fisico_mecanica TEXT DEFAULT ''");
+    }
+    if (!cols.includes('fm_foto_anterior_ruta')) db.exec("ALTER TABLE unidades ADD COLUMN fm_foto_anterior_ruta TEXT DEFAULT ''");
+    if (!cols.includes('fm_foto_vigente_ruta')) db.exec("ALTER TABLE unidades ADD COLUMN fm_foto_vigente_ruta TEXT DEFAULT ''");
+    if (!cols.includes('tarjeta_circulacion_ruta')) {
+      db.exec("ALTER TABLE unidades ADD COLUMN tarjeta_circulacion_ruta TEXT DEFAULT ''");
+    }
+    if (!cols.includes('unidad_rotulada')) db.exec('ALTER TABLE unidades ADD COLUMN unidad_rotulada INTEGER');
     db.exec("UPDATE unidades SET estatus = 'Disponible', subestatus_disponible = 'taller' WHERE estatus = 'Taller'");
     // Marcador claro cuando nunca se capturó serie (no es un “formato” de negocio).
     db.exec("UPDATE unidades SET numero_serie_caja = 'PENDIENTE-' || id WHERE TRIM(COALESCE(numero_serie_caja, '')) = ''");
@@ -272,7 +288,21 @@ function migrarUnidades() {
 const ESTADOS_RENTA = ['reservada', 'activa', 'finalizada', 'cancelada'];
 const TIPOS_SERVICIO = ['solo_renta', 'con_operador', 'con_transporte'];
 const ESTADOS_LOGISTICOS = ['programado', 'en_camino', 'entregado', 'finalizado'];
-const TIPOS_UNIDAD = ['remolque_seco', 'refrigerado', 'maquinaria'];
+const TIPOS_UNIDAD = [
+  'remolque_seco',
+  'refrigerado',
+  'maquinaria',
+  'dolly',
+  'plataforma',
+  'camion',
+  'vehiculo_empresarial',
+  'caja_refrigerada_sin_termo',
+  'pickup',
+];
+
+function unidadUsaDatosRefrigeracion(tipo) {
+  return tipo === 'refrigerado' || tipo === 'caja_refrigerada_sin_termo';
+}
 
 export function initRentas() {
   db.exec(`
@@ -405,7 +435,7 @@ export function getAllRentas() {
     `SELECT r.id, r.unidad_id, r.cliente_id, r.cliente_nombre, r.cliente_telefono, r.cliente_email, r.fecha_inicio, r.fecha_fin, r.estado,
             r.monto, r.deposito, r.observaciones, r.creado_en,
             r.tipo_servicio, r.ubicacion_entrega, r.ubicacion_recoleccion, r.estado_logistico, r.precio_base, r.extras, r.operador_asignado,
-            u.placas, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
+            u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
      FROM rentas r
      JOIN unidades u ON u.id = r.unidad_id AND u.activo = 1
      ORDER BY r.fecha_inicio DESC`
@@ -418,6 +448,7 @@ function mapRentaRow(r) {
     id: String(r.id),
     unidadId: String(r.unidad_id),
     placas: r.placas,
+    numeroEconomico: String(r.numero_economico || '').trim(),
     marca: r.marca,
     modelo: r.modelo,
     tipoUnidad: r.tipo_unidad || 'remolque_seco',
@@ -444,7 +475,7 @@ function mapRentaRow(r) {
 
 export function getRentaById(id) {
   const r = db.prepare(
-    `SELECT r.*, u.placas, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
+    `SELECT r.*, u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
      FROM rentas r JOIN unidades u ON u.id = r.unidad_id WHERE r.id = ?`
   ).get(Number(id));
   if (!r) return null;
@@ -550,7 +581,7 @@ export function createRenta(data, usuarioId = null) {
     String(operadorAsignado || '').trim()
   );
   const rentaId = r.lastInsertRowid;
-  if (u.tipo_unidad === 'refrigerado' && refrigerado) {
+  if (unidadUsaDatosRefrigeracion(u.tipo_unidad) && refrigerado) {
     db.prepare(
       `INSERT INTO rentas_refrigerado (renta_id, temperatura_objetivo, combustible_inicio, combustible_fin, horas_motor_inicio, horas_motor_fin, observaciones)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -789,7 +820,7 @@ export function getRentasProximosVencimientos(dias = 14) {
   fin.setDate(fin.getDate() + dias);
   const finStr = fin.toISOString().slice(0, 10);
   const rows = db.prepare(
-    `SELECT r.id, r.unidad_id, r.cliente_nombre, r.fecha_inicio, r.fecha_fin, r.estado, u.placas, u.marca, u.modelo
+    `SELECT r.id, r.unidad_id, r.cliente_nombre, r.fecha_inicio, r.fecha_fin, r.estado, u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo
      FROM rentas r
      JOIN unidades u ON u.id = r.unidad_id AND u.activo = 1
      WHERE r.fecha_fin >= ? AND r.fecha_fin <= ? AND r.estado IN ('activa', 'reservada')
@@ -799,6 +830,7 @@ export function getRentasProximosVencimientos(dias = 14) {
     id: String(r.id),
     unidadId: String(r.unidad_id),
     placas: r.placas,
+    numeroEconomico: String(r.numero_economico || '').trim(),
     marca: r.marca,
     modelo: r.modelo,
     clienteNombre: r.cliente_nombre,
@@ -862,6 +894,7 @@ function mapMantenimientoRow(m) {
     o.placas = m.placas;
     o.marca = m.marca;
     o.modelo = m.modelo;
+    o.numeroEconomico = String(m.numero_economico ?? '').trim();
   }
   if (m.proveedor_id != null && m.proveedor_id !== '') {
     o.proveedorId = String(m.proveedor_id);
@@ -884,7 +917,7 @@ export function getMantenimientosByUnidad(unidadId) {
 
 export function getAllMantenimientos() {
   const rows = db.prepare(
-    `SELECT m.*, u.placas, u.marca, u.modelo, p.nombre_razon_social AS proveedor_nombre
+    `SELECT m.*, u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, p.nombre_razon_social AS proveedor_nombre
      FROM mantenimiento m
      JOIN unidades u ON u.id = m.unidad_id
      LEFT JOIN proveedores p ON p.id = m.proveedor_id
@@ -937,7 +970,7 @@ export function createMantenimiento(data, usuarioId = null) {
 
 function getMantenimientoById(id) {
   const m = db.prepare(
-    `SELECT m.*, u.placas, u.marca, u.modelo, p.nombre_razon_social AS proveedor_nombre
+    `SELECT m.*, u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, p.nombre_razon_social AS proveedor_nombre
      FROM mantenimiento m
      JOIN unidades u ON u.id = m.unidad_id
      LEFT JOIN proveedores p ON p.id = m.proveedor_id
@@ -1005,7 +1038,7 @@ export function getRentasPorMes(ano, mes) {
   const fin = `${ano}-${String(mes).padStart(2, '0')}-31`;
   const rows = db.prepare(
     `SELECT r.id, r.unidad_id, r.cliente_nombre, r.fecha_inicio, r.fecha_fin, r.estado, r.estado_logistico,
-            u.placas, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
+            u.placas, COALESCE(u.numero_economico, '') as numero_economico, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
      FROM rentas r
      JOIN unidades u ON u.id = r.unidad_id AND u.activo = 1
      WHERE (r.fecha_inicio <= ? AND r.fecha_fin >= ?) OR (r.fecha_inicio BETWEEN ? AND ?)
@@ -1015,6 +1048,7 @@ export function getRentasPorMes(ano, mes) {
     id: String(r.id),
     unidadId: String(r.unidad_id),
     placas: r.placas,
+    numeroEconomico: String(r.numero_economico || '').trim(),
     tipoUnidad: r.tipo_unidad || 'remolque_seco',
     clienteNombre: r.cliente_nombre,
     fechaInicio: r.fecha_inicio,
@@ -1189,6 +1223,9 @@ export function initUnidades() {
       modelo TEXT NOT NULL,
       estatus TEXT NOT NULL DEFAULT 'Disponible',
       numero_serie_caja TEXT DEFAULT '',
+      tiene_gps INTEGER NOT NULL DEFAULT 0,
+      gps_numero_1 TEXT DEFAULT '',
+      gps_numero_2 TEXT DEFAULT '',
       subestatus_disponible TEXT NOT NULL DEFAULT 'disponible',
       ubicacion_disponible TEXT NOT NULL DEFAULT 'lote',
       kilometraje INTEGER NOT NULL DEFAULT 0,
@@ -1260,11 +1297,18 @@ export function initUnidades() {
 
 export function getAllUnidades() {
   const rows = db.prepare(
-    `SELECT id, placas, marca, modelo, estatus, numero_serie_caja, subestatus_disponible, ubicacion_disponible,
-            kilometraje, combustible_pct, observaciones, creado_en,
+    `SELECT id, placas, COALESCE(numero_economico, '') as numero_economico, marca, modelo, estatus, numero_serie_caja,
+            COALESCE(tiene_gps, 0) as tiene_gps, COALESCE(gps_numero_1, '') as gps_numero_1, COALESCE(gps_numero_2, '') as gps_numero_2,
+            subestatus_disponible, ubicacion_disponible,
+            kilometraje, combustible_pct,           observaciones, creado_en,
             COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad,
             COALESCE(estado_mantenimiento, 'disponible') as estado_mantenimiento,
             COALESCE(horas_motor, 0) as horas_motor,
+            COALESCE(gestor_fisico_mecanica, '') as gestor_fisico_mecanica,
+            COALESCE(fm_foto_anterior_ruta, '') as fm_foto_anterior_ruta,
+            COALESCE(fm_foto_vigente_ruta, '') as fm_foto_vigente_ruta,
+            COALESCE(tarjeta_circulacion_ruta, '') as tarjeta_circulacion_ruta,
+            unidad_rotulada,
             (
               SELECT r.cliente_nombre
               FROM rentas r
@@ -1272,7 +1316,10 @@ export function getAllUnidades() {
               ORDER BY CASE r.estado WHEN 'activa' THEN 0 ELSE 1 END, r.fecha_inicio DESC
               LIMIT 1
             ) AS cliente_en_renta
-     FROM unidades WHERE activo = 1 ORDER BY placas`
+     FROM unidades WHERE activo = 1
+     ORDER BY CASE WHEN TRIM(COALESCE(numero_economico, '')) = '' THEN 1 ELSE 0 END,
+              numero_economico COLLATE NOCASE,
+              placas COLLATE NOCASE`
   ).all();
   const docs = db.prepare(
     'SELECT id, unidad_id, tipo, nombre, ruta, fecha_subida FROM unidad_documentos ORDER BY fecha_subida DESC'
@@ -1286,10 +1333,14 @@ export function getAllUnidades() {
   return rows.map(u => ({
     id: String(u.id),
     placas: u.placas,
+    numeroEconomico: String(u.numero_economico || '').trim(),
     marca: u.marca,
     modelo: u.modelo,
     estatus: u.estatus,
     numeroSerieCaja: String(u.numero_serie_caja || '').trim(),
+    tieneGps: Number(u.tiene_gps) === 1,
+    gpsNumero1: String(u.gps_numero_1 || '').trim(),
+    gpsNumero2: String(u.gps_numero_2 || '').trim(),
     subestatusDisponible: u.subestatus_disponible || 'disponible',
     ubicacionDisponible: u.ubicacion_disponible || 'lote',
     clienteEnRenta: u.cliente_en_renta || '',
@@ -1299,6 +1350,12 @@ export function getAllUnidades() {
     tipoUnidad: u.tipo_unidad || 'remolque_seco',
     estadoMantenimiento: u.estado_mantenimiento || 'disponible',
     horasMotor: u.horas_motor || 0,
+    gestorFisicoMecanica: String(u.gestor_fisico_mecanica || '').trim(),
+    fmFotoAnteriorRuta: String(u.fm_foto_anterior_ruta || '').trim(),
+    fmFotoVigenteRuta: String(u.fm_foto_vigente_ruta || '').trim(),
+    tarjetaCirculacionRuta: String(u.tarjeta_circulacion_ruta || '').trim(),
+    unidadRotulada:
+      u.unidad_rotulada === null || u.unidad_rotulada === undefined ? null : Number(u.unidad_rotulada) === 1,
     documentos: docs.filter(d => d.unidad_id === u.id).map(d => ({
       id: String(d.id),
       nombre: d.nombre,
@@ -1325,11 +1382,18 @@ export function getAllUnidades() {
 
 export function getUnidadById(id) {
   const u = db.prepare(
-    `SELECT id, placas, marca, modelo, estatus, numero_serie_caja, subestatus_disponible, ubicacion_disponible,
+    `SELECT id, placas, COALESCE(numero_economico, '') as numero_economico, marca, modelo, estatus, numero_serie_caja,
+            COALESCE(tiene_gps, 0) as tiene_gps, COALESCE(gps_numero_1, '') as gps_numero_1, COALESCE(gps_numero_2, '') as gps_numero_2,
+            subestatus_disponible, ubicacion_disponible,
             kilometraje, combustible_pct, observaciones,
             COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad,
             COALESCE(estado_mantenimiento, 'disponible') as estado_mantenimiento,
             COALESCE(horas_motor, 0) as horas_motor,
+            COALESCE(gestor_fisico_mecanica, '') as gestor_fisico_mecanica,
+            COALESCE(fm_foto_anterior_ruta, '') as fm_foto_anterior_ruta,
+            COALESCE(fm_foto_vigente_ruta, '') as fm_foto_vigente_ruta,
+            COALESCE(tarjeta_circulacion_ruta, '') as tarjeta_circulacion_ruta,
+            unidad_rotulada,
             (
               SELECT r.cliente_nombre
               FROM rentas r
@@ -1346,10 +1410,14 @@ export function getUnidadById(id) {
   return {
     id: String(u.id),
     placas: u.placas,
+    numeroEconomico: String(u.numero_economico || '').trim(),
     marca: u.marca,
     modelo: u.modelo,
     estatus: u.estatus,
     numeroSerieCaja: String(u.numero_serie_caja || '').trim(),
+    tieneGps: Number(u.tiene_gps) === 1,
+    gpsNumero1: String(u.gps_numero_1 || '').trim(),
+    gpsNumero2: String(u.gps_numero_2 || '').trim(),
     subestatusDisponible: u.subestatus_disponible || 'disponible',
     ubicacionDisponible: u.ubicacion_disponible || 'lote',
     clienteEnRenta: u.cliente_en_renta || '',
@@ -1359,6 +1427,12 @@ export function getUnidadById(id) {
     tipoUnidad: u.tipo_unidad || 'remolque_seco',
     estadoMantenimiento: u.estado_mantenimiento || 'disponible',
     horasMotor: u.horas_motor || 0,
+    gestorFisicoMecanica: String(u.gestor_fisico_mecanica || '').trim(),
+    fmFotoAnteriorRuta: String(u.fm_foto_anterior_ruta || '').trim(),
+    fmFotoVigenteRuta: String(u.fm_foto_vigente_ruta || '').trim(),
+    tarjetaCirculacionRuta: String(u.tarjeta_circulacion_ruta || '').trim(),
+    unidadRotulada:
+      u.unidad_rotulada === null || u.unidad_rotulada === undefined ? null : Number(u.unidad_rotulada) === 1,
     documentos: docs.map(d => ({ id: String(d.id), nombre: d.nombre, tipo: d.tipo, ruta: d.ruta || '', fechaSubida: d.fecha_subida })),
     actividad: acts.map(a => ({ id: String(a.id), accion: a.accion, detalle: a.detalle, fecha: a.fecha, icon: a.icon || 'mdi:information' })),
     imagenes: imgs.map(i => ({
@@ -1369,6 +1443,35 @@ export function getUnidadById(id) {
       fechaSubida: i.fecha_subida,
     })),
   };
+}
+
+const EXPEDIENTE_FOTO_COLUMN = {
+  fm_anterior: 'fm_foto_anterior_ruta',
+  fm_vigente: 'fm_foto_vigente_ruta',
+  tarjeta_circulacion: 'tarjeta_circulacion_ruta',
+};
+
+/** Actualiza ruta de foto de expediente (físico-mecánica o tarjeta). Devuelve ruta anterior para borrar archivo. */
+export function setUnidadExpedienteFoto(unidadId, slot, relativePath, usuarioId = null) {
+  const col = EXPEDIENTE_FOTO_COLUMN[slot];
+  if (!col) return null;
+  const row = db.prepare(`SELECT id, ${col} as old_ruta FROM unidades WHERE id = ? AND activo = 1`).get(Number(unidadId));
+  if (!row) return null;
+  const oldRuta = String(row.old_ruta || '').trim();
+  const next = String(relativePath || '').trim();
+  db.prepare(`UPDATE unidades SET ${col} = ?, actualizado_en = datetime('now') WHERE id = ?`).run(next, Number(unidadId));
+  const label =
+    slot === 'fm_anterior'
+      ? 'Físico-mecánica anterior'
+      : slot === 'fm_vigente'
+        ? 'Físico-mecánica vigente'
+        : 'Tarjeta de circulación';
+  logUnidadActividadRow(unidadId, 'Expediente · foto', `${next ? 'Actualizada' : 'Eliminada'}: ${label}`, 'mdi:camera', usuarioId);
+  return { oldRuta, unidad: getUnidadById(unidadId) };
+}
+
+export function clearUnidadExpedienteFotoSlot(unidadId, slot, usuarioId = null) {
+  return setUnidadExpedienteFoto(unidadId, slot, '', usuarioId);
 }
 
 export function addUnidadImagen(unidadId, nombreArchivo, ruta, descripcion = '', usuarioId = null) {
@@ -1406,6 +1509,19 @@ export function existePlacas(placas, excludeId = null) {
   return !!row;
 }
 
+export function existeNumeroEconomico(ne, excludeId = null) {
+  const t = String(ne ?? '').trim();
+  if (!t) return false;
+  const row = excludeId
+    ? db
+        .prepare(
+          'SELECT 1 FROM unidades WHERE UPPER(TRIM(numero_economico)) = UPPER(TRIM(?)) AND id != ? AND activo = 1'
+        )
+        .get(t, excludeId)
+    : db.prepare('SELECT 1 FROM unidades WHERE UPPER(TRIM(numero_economico)) = UPPER(TRIM(?)) AND activo = 1').get(t);
+  return !!row;
+}
+
 function logUnidadActividadRow(unidadId, accion, detalle, icon, usuarioId = null) {
   db.prepare('INSERT INTO unidad_actividad (unidad_id, accion, detalle, icon) VALUES (?, ?, ?, ?)').run(
     Number(unidadId),
@@ -1429,10 +1545,14 @@ function logUnidadActividadRow(unidadId, accion, detalle, icon, usuarioId = null
 export function createUnidad(data, usuarioId = null) {
   const {
     placas,
+    numeroEconomico,
     marca,
     modelo,
     estatus = 'Disponible',
     numeroSerieCaja = '',
+    tieneGps = false,
+    gpsNumero1 = '',
+    gpsNumero2 = '',
     subestatusDisponible = 'disponible',
     ubicacionDisponible = 'lote',
     kilometraje = 0,
@@ -1440,36 +1560,53 @@ export function createUnidad(data, usuarioId = null) {
     observaciones = '',
     tipoUnidad = 'remolque_seco',
     horasMotor = 0,
+    gestorFisicoMecanica = '',
+    unidadRotulada = null,
   } = data;
   if (!placas || !marca || !modelo) return null;
+  const ne = String(numeroEconomico ?? '').trim();
+  if (!ne) return null;
   if (!String(numeroSerieCaja || '').trim()) return null;
+  const gpsOn = !!tieneGps;
+  const gps1 = gpsOn ? String(gpsNumero1 || '').trim() : '';
+  const gps2 = gpsOn ? String(gpsNumero2 || '').trim() : '';
+  if (gpsOn && !gps1 && !gps2) return null;
   if (existePlacas(placas)) return null;
+  if (existeNumeroEconomico(ne)) return null;
   if (!ESTADOS_UNIDAD.includes(estatus)) return null;
   const subestatus = SUBESTADOS_DISPONIBLE.includes(subestatusDisponible) ? subestatusDisponible : 'disponible';
   const ubicacion = UBICACIONES_DISPONIBLE.includes(ubicacionDisponible) ? ubicacionDisponible : 'lote';
   const tipo = TIPOS_UNIDAD.includes(tipoUnidad) ? tipoUnidad : 'remolque_seco';
+  const rotSql =
+    unidadRotulada === null || unidadRotulada === undefined ? null : unidadRotulada ? 1 : 0;
   const run = db.prepare(
-    'INSERT INTO unidades (placas, marca, modelo, estatus, numero_serie_caja, subestatus_disponible, ubicacion_disponible, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO unidades (placas, numero_economico, marca, modelo, estatus, numero_serie_caja, tiene_gps, gps_numero_1, gps_numero_2, subestatus_disponible, ubicacion_disponible, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor, gestor_fisico_mecanica, unidad_rotulada) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const r = run.run(
     String(placas).trim(),
+    ne,
     String(marca).trim(),
     String(modelo).trim(),
     estatus,
     String(numeroSerieCaja || '').trim(),
+    gpsOn ? 1 : 0,
+    gps1,
+    gps2,
     subestatus,
     ubicacion,
     Number(kilometraje) || 0,
     Math.max(0, Math.min(100, Number(combustiblePct) || 0)),
     String(observaciones || '').trim(),
     tipo,
-    Number(horasMotor) || 0
+    Number(horasMotor) || 0,
+    String(gestorFisicoMecanica || '').trim(),
+    rotSql
   );
   const id = r.lastInsertRowid;
   logUnidadActividadRow(
     id,
     'Unidad registrada',
-    `Nueva unidad ${placas} (${marca} ${modelo}) agregada al inventario.`,
+    `Nueva unidad ${ne} · ${placas} (${marca} ${modelo}) agregada al inventario.`,
     'mdi:car-plus',
     usuarioId
   );
@@ -1482,9 +1619,33 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   const updates = [];
   const values = [];
   const {
-    placas, marca, modelo, estatus, numeroSerieCaja, subestatusDisponible, ubicacionDisponible,
-    kilometraje, combustiblePct, observaciones, tipoUnidad, estadoMantenimiento, horasMotor
+    placas,
+    marca,
+    modelo,
+    estatus,
+    numeroSerieCaja,
+    numeroEconomico,
+    tieneGps,
+    gpsNumero1,
+    gpsNumero2,
+    subestatusDisponible,
+    ubicacionDisponible,
+    kilometraje,
+    combustiblePct,
+    observaciones,
+    tipoUnidad,
+    estadoMantenimiento,
+    horasMotor,
+    gestorFisicoMecanica,
+    unidadRotulada,
   } = data;
+  if (numeroEconomico != null) {
+    const ne = String(numeroEconomico).trim();
+    if (!ne) return null;
+    if (existeNumeroEconomico(ne, Number(id))) return null;
+    updates.push('numero_economico = ?');
+    values.push(ne);
+  }
   if (placas != null) { updates.push('placas = ?'); values.push(String(placas).trim()); }
   if (marca != null) { updates.push('marca = ?'); values.push(String(marca).trim()); }
   if (modelo != null) { updates.push('modelo = ?'); values.push(String(modelo).trim()); }
@@ -1492,6 +1653,21 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (numeroSerieCaja != null && String(numeroSerieCaja).trim()) {
     updates.push('numero_serie_caja = ?');
     values.push(String(numeroSerieCaja).trim());
+  }
+  if (tieneGps != null) {
+    const gpsOn = !!tieneGps;
+    updates.push('tiene_gps = ?');
+    values.push(gpsOn ? 1 : 0);
+    const gps1 = gpsOn ? String(gpsNumero1 || '').trim() : '';
+    const gps2 = gpsOn ? String(gpsNumero2 || '').trim() : '';
+    if (gpsOn && !gps1 && !gps2) return null;
+    updates.push('gps_numero_1 = ?');
+    values.push(gps1);
+    updates.push('gps_numero_2 = ?');
+    values.push(gps2);
+  } else {
+    if (gpsNumero1 != null) { updates.push('gps_numero_1 = ?'); values.push(String(gpsNumero1 || '').trim()); }
+    if (gpsNumero2 != null) { updates.push('gps_numero_2 = ?'); values.push(String(gpsNumero2 || '').trim()); }
   }
   if (subestatusDisponible != null && SUBESTADOS_DISPONIBLE.includes(subestatusDisponible)) { updates.push('subestatus_disponible = ?'); values.push(subestatusDisponible); }
   if (ubicacionDisponible != null && UBICACIONES_DISPONIBLE.includes(ubicacionDisponible)) { updates.push('ubicacion_disponible = ?'); values.push(ubicacionDisponible); }
@@ -1501,6 +1677,18 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (tipoUnidad != null && TIPOS_UNIDAD.includes(tipoUnidad)) { updates.push('tipo_unidad = ?'); values.push(tipoUnidad); }
   if (estadoMantenimiento != null && ['disponible', 'en_mantenimiento', 'fuera_de_servicio'].includes(estadoMantenimiento)) { updates.push('estado_mantenimiento = ?'); values.push(estadoMantenimiento); }
   if (horasMotor != null) { updates.push('horas_motor = ?'); values.push(Number(horasMotor) || 0); }
+  if (gestorFisicoMecanica != null) {
+    updates.push('gestor_fisico_mecanica = ?');
+    values.push(String(gestorFisicoMecanica || '').trim());
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'unidadRotulada')) {
+    if (unidadRotulada === null || unidadRotulada === undefined) {
+      updates.push('unidad_rotulada = NULL');
+    } else {
+      updates.push('unidad_rotulada = ?');
+      values.push(unidadRotulada ? 1 : 0);
+    }
+  }
   if (updates.length === 0) return getUnidadById(id);
   updates.push("actualizado_en = datetime('now')");
   values.push(id);
@@ -1511,6 +1699,9 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (modelo != null) campos.push('modelo');
   if (estatus != null) campos.push('estatus');
   if (numeroSerieCaja != null) campos.push('numero_serie_caja');
+  if (numeroEconomico != null) campos.push('numero_economico');
+  if (tieneGps != null) campos.push('tiene_gps');
+  if (gpsNumero1 != null || gpsNumero2 != null) campos.push('gps');
   if (subestatusDisponible != null) campos.push('subestatus_disponible');
   if (ubicacionDisponible != null) campos.push('ubicacion_disponible');
   if (kilometraje != null) campos.push('kilometraje');
@@ -1519,6 +1710,8 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (tipoUnidad != null) campos.push('tipo_unidad');
   if (estadoMantenimiento != null) campos.push('estado_mantenimiento');
   if (horasMotor != null) campos.push('horas_motor');
+  if (gestorFisicoMecanica != null) campos.push('gestor_fisico_mecanica');
+  if (Object.prototype.hasOwnProperty.call(data, 'unidadRotulada')) campos.push('unidad_rotulada');
   if (campos.length > 0) {
     logUnidadActividadRow(
       id,
@@ -1729,7 +1922,7 @@ function buildCheckinOutImagenesMap() {
 
 export function getCheckinOutRegistroById(id) {
   const row = db.prepare(
-    `SELECT c.*, u.placas, u.marca, u.modelo, ua.nombre AS usuario_nombre,
+    `SELECT c.*, u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, ua.nombre AS usuario_nombre,
             r.cliente_nombre AS renta_cliente
      FROM checkin_out_registros c
      JOIN unidades u ON u.id = c.unidad_id
@@ -1762,6 +1955,7 @@ function mapCheckinOutRow(row, imagenes = []) {
     tipo: row.tipo,
     unidadId: String(row.unidad_id),
     placas: row.placas,
+    numeroEconomico: String(row.numero_economico || '').trim(),
     marca: row.marca,
     modelo: row.modelo,
     rentaId: row.renta_id != null ? String(row.renta_id) : null,
@@ -1784,7 +1978,7 @@ function mapCheckinOutRow(row, imagenes = []) {
 export function getCheckinOutRegistros(limit = 80) {
   const max = Math.min(Math.max(1, Number(limit) || 80), 200);
   const rows = db.prepare(
-    `SELECT c.*, u.placas, u.marca, u.modelo, ua.nombre AS usuario_nombre,
+    `SELECT c.*, u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, ua.nombre AS usuario_nombre,
             r.cliente_nombre AS renta_cliente
      FROM checkin_out_registros c
      JOIN unidades u ON u.id = c.unidad_id
@@ -2429,7 +2623,7 @@ export function getProveedorById(id) {
   const mantenimientosRows = db
     .prepare(
       `SELECT m.id, m.unidad_id, m.tipo, m.descripcion, m.costo, m.fecha_inicio, m.fecha_fin, m.estado, m.creado_en,
-              u.placas AS unidad_placas, u.marca AS unidad_marca, u.modelo AS unidad_modelo
+              u.placas AS unidad_placas, COALESCE(u.numero_economico, '') AS unidad_numero_economico, u.marca AS unidad_marca, u.modelo AS unidad_modelo
        FROM mantenimiento m
        JOIN unidades u ON u.id = m.unidad_id
        WHERE m.proveedor_id = ?
@@ -2440,6 +2634,7 @@ export function getProveedorById(id) {
     id: String(row.id),
     unidadId: String(row.unidad_id),
     placas: row.unidad_placas || '',
+    numeroEconomico: String(row.unidad_numero_economico || '').trim(),
     marca: row.unidad_marca || '',
     modelo: row.unidad_modelo || '',
     tipo: row.tipo,
@@ -2698,7 +2893,10 @@ export function getReporteCuentasPorPagar() {
 export function getReporteProveedoresPorUnidad() {
   const unidades = db
     .prepare(
-      `SELECT id, placas, marca, modelo FROM unidades WHERE activo = 1 ORDER BY placas COLLATE NOCASE`
+      `SELECT id, placas, COALESCE(numero_economico, '') as numero_economico, marca, modelo FROM unidades WHERE activo = 1
+       ORDER BY CASE WHEN TRIM(COALESCE(numero_economico, '')) = '' THEN 1 ELSE 0 END,
+                numero_economico COLLATE NOCASE,
+                placas COLLATE NOCASE`
     )
     .all();
   const out = [];
@@ -2718,6 +2916,7 @@ export function getReporteProveedoresPorUnidad() {
     out.push({
       unidadId: String(u.id),
       placas: u.placas,
+      numeroEconomico: String(u.numero_economico || '').trim(),
       marca: u.marca,
       modelo: u.modelo,
       totalFacturado: Math.round(facturado * 100) / 100,

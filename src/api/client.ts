@@ -1,3 +1,5 @@
+import type { TipoUnidadCatalogo } from '../lib/tipoUnidadCatalogo';
+
 const API_BASE = '/api';
 
 /** Puerto del backend en desarrollo (debe coincidir con `PORT` del servidor, por defecto 3001). */
@@ -368,6 +370,7 @@ export type ProveedorMantenimientoVinculo = {
   id: string;
   unidadId: string;
   placas: string;
+  numeroEconomico?: string;
   marca: string;
   modelo: string;
   tipo: string;
@@ -408,6 +411,7 @@ export type ReporteCuentasPorPagar = {
 export type ReportePorUnidad = {
   unidadId: string;
   placas: string;
+  numeroEconomico?: string;
   marca: string;
   modelo: string;
   totalFacturado: number;
@@ -567,23 +571,38 @@ export type UnidadImg = { id: string; nombreArchivo: string; ruta: string; descr
 export type UnidadRow = {
   id: string;
   placas: string;
+  /** Identificador operativo principal (único por unidad activa). */
+  numeroEconomico?: string;
   marca: string;
   modelo: string;
   estatus: 'Disponible' | 'En Renta';
   numeroSerieCaja?: string;
+  tieneGps?: boolean;
+  gpsNumero1?: string;
+  gpsNumero2?: string;
   subestatusDisponible?: 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
   ubicacionDisponible?: 'lote' | 'patio';
   clienteEnRenta?: string;
   kilometraje: number;
   combustiblePct: number;
   observaciones: string;
-  tipoUnidad?: 'remolque_seco' | 'refrigerado' | 'maquinaria';
+  tipoUnidad?: TipoUnidadCatalogo;
   estadoMantenimiento?: 'disponible' | 'en_mantenimiento' | 'fuera_de_servicio';
   horasMotor?: number;
+  /** Quién gestiona la renovación de físico-mecánica (p. ej. gestor / despacho). */
+  gestorFisicoMecanica?: string;
+  /** Rutas relativas en `/uploads/...` para expediente. */
+  fmFotoAnteriorRuta?: string;
+  fmFotoVigenteRuta?: string;
+  tarjetaCirculacionRuta?: string;
+  /** Si la unidad está rotulada con marca; `null` = sin definir. */
+  unidadRotulada?: boolean | null;
   documentos: UnidadDoc[];
   actividad: UnidadAct[];
   imagenes?: UnidadImg[];
 };
+
+export type UnidadExpedienteFotoSlot = 'fm_anterior' | 'fm_vigente' | 'tarjeta_circulacion';
 
 export async function getUnidades(): Promise<UnidadRow[]> {
   const res = await fetchWithAuth(`${API_BASE}/unidades`);
@@ -601,17 +620,23 @@ export async function getUnidad(id: string): Promise<UnidadRow> {
 
 export async function createUnidad(p: {
   placas: string;
+  numeroEconomico: string;
   marca: string;
   modelo: string;
   estatus?: string;
   numeroSerieCaja?: string;
+  tieneGps?: boolean;
+  gpsNumero1?: string;
+  gpsNumero2?: string;
   subestatusDisponible?: 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
   ubicacionDisponible?: 'lote' | 'patio';
   kilometraje?: number;
   combustiblePct?: number;
   observaciones?: string;
-  tipoUnidad?: 'remolque_seco' | 'refrigerado' | 'maquinaria';
+  tipoUnidad?: TipoUnidadCatalogo;
   horasMotor?: number;
+  gestorFisicoMecanica?: string;
+  unidadRotulada?: boolean | null;
 }): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades`, {
     method: 'POST',
@@ -626,10 +651,14 @@ export async function updateUnidad(
   id: string,
   p: Partial<{
     placas: string;
+    numeroEconomico: string;
     marca: string;
     modelo: string;
     estatus: string;
     numeroSerieCaja: string;
+    tieneGps: boolean;
+    gpsNumero1: string;
+    gpsNumero2: string;
     subestatusDisponible: 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
     ubicacionDisponible: 'lote' | 'patio';
     kilometraje: number;
@@ -638,6 +667,8 @@ export async function updateUnidad(
     tipoUnidad: string;
     estadoMantenimiento: string;
     horasMotor: number;
+    gestorFisicoMecanica: string;
+    unidadRotulada: boolean | null;
   }>
 ): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades/${id}`, {
@@ -761,6 +792,39 @@ export async function deleteImagenUnidad(unidadId: string, imgId: string): Promi
   return data.unidad!;
 }
 
+export async function uploadUnidadExpedienteFoto(
+  unidadId: string,
+  slot: UnidadExpedienteFotoSlot,
+  file: File
+): Promise<UnidadRow> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('imagen', file);
+  form.append('slot', slot);
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/unidades/${unidadId}/expediente-fotos`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  const data = await parseResponse<{ unidad?: UnidadRow; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al subir foto del expediente');
+  return data.unidad!;
+}
+
+export async function deleteUnidadExpedienteFoto(
+  unidadId: string,
+  slot: UnidadExpedienteFotoSlot
+): Promise<UnidadRow> {
+  const res = await fetchWithAuth(`${API_BASE}/unidades/${unidadId}/expediente-fotos/${slot}`, {
+    method: 'DELETE',
+  });
+  const data = await parseResponse<{ unidad?: UnidadRow; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al eliminar foto del expediente');
+  return data.unidad!;
+}
+
 /* ─── Rentas ─── */
 export type RentaRefrigerado = {
   temperaturaObjetivo: number;
@@ -808,9 +872,10 @@ export type RentaRow = {
   id: string;
   unidadId: string;
   placas: string;
+  numeroEconomico?: string;
   marca: string;
   modelo: string;
-  tipoUnidad?: 'remolque_seco' | 'refrigerado' | 'maquinaria';
+  tipoUnidad?: TipoUnidadCatalogo;
   /** Expediente de cliente en catálogo, si la renta está vinculada */
   clienteId?: string;
   clienteNombre: string;
@@ -841,6 +906,7 @@ export type RentaCalendario = {
   id: string;
   unidadId: string;
   placas: string;
+  numeroEconomico?: string;
   tipoUnidad?: string;
   clienteNombre: string;
   fechaInicio: string;
@@ -869,6 +935,7 @@ export type VencimientoRenta = {
   id: string;
   unidadId: string;
   placas: string;
+  numeroEconomico?: string;
   marca: string;
   modelo: string;
   clienteNombre: string;
@@ -1168,6 +1235,7 @@ export type MantenimientoRow = {
   id: string;
   unidadId: string;
   placas?: string;
+  numeroEconomico?: string;
   marca?: string;
   modelo?: string;
   proveedorId?: string;
@@ -1253,6 +1321,7 @@ export type CheckinOutRegistro = {
   tipo: 'checkin' | 'checkout';
   unidadId: string;
   placas: string;
+  numeroEconomico?: string;
   marca: string;
   modelo: string;
   rentaId: string | null;

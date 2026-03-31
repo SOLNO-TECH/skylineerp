@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Icon } from '@iconify/react';
 import { getReporteCuentasPorPagarApi, getReporteProveedoresPorUnidadApi } from '../api/client';
 import type { FacturaPendienteReporte, ReportePorUnidad } from '../api/client';
+import { etiquetaUnidadLista } from '../lib/unidadDisplay';
 
 function fmtMoney(n: number) {
   return `$${(n ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -184,7 +185,12 @@ export function ProveedoresReportes() {
                 {porUnidad.map((u) => (
                   <tr key={u.unidadId} className="border-b border-skyline-border hover:bg-gray-50/80">
                     <td className="px-3 py-2 font-medium text-gray-900">
-                      {u.placas} · {u.marca} {u.modelo}
+                      {etiquetaUnidadLista({
+                        numeroEconomico: u.numeroEconomico ?? '',
+                        placas: u.placas,
+                        marca: u.marca,
+                        modelo: u.modelo,
+                      })}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-600">{u.numFacturas}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(u.totalFacturado)}</td>
