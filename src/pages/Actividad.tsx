@@ -48,6 +48,25 @@ const TIPO_ETIQUETA: Record<ActividadItem['tipo'], string> = {
   cliente: 'Cliente',
 };
 
+/** Si el icono de API está vacío o no es mdi:, usar uno por tipo. */
+const ICONO_DEFAULT_POR_TIPO: Record<ActividadItem['tipo'], string> = {
+  unidad: 'mdi:truck-outline',
+  renta: 'mdi:calendar-month',
+  usuario: 'mdi:account-outline',
+  mantenimiento: 'mdi:wrench-outline',
+  auth: 'mdi:login',
+  sistema: 'mdi:information-outline',
+  proveedor: 'mdi:truck-delivery-outline',
+  cliente: 'mdi:account-tie-outline',
+};
+
+function iconoActividad(item: ActividadItem): string {
+  const raw = (item.icon || '').trim();
+  /** p. ej. mdi:car-plus (el «+» no encaja en \w en regex estricta). */
+  if (raw.includes(':') && raw.length > 2) return raw;
+  return ICONO_DEFAULT_POR_TIPO[item.tipo] ?? 'mdi:information';
+}
+
 type FiltroTipo = 'todos' | ActividadItem['tipo'];
 
 export function Actividad() {
@@ -131,7 +150,7 @@ export function Actividad() {
             filtrados.map((item) => (
               <li key={item.id} className="flex gap-4 px-4 py-3 hover:bg-gray-50/50">
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-skyline-blue/10 text-skyline-blue">
-                  <Icon icon={item.icon || 'mdi:information'} className="size-4" aria-hidden />
+                  <Icon icon={iconoActividad(item)} className="size-4 shrink-0" aria-hidden />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="font-medium text-gray-900">{item.accion}</p>

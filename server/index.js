@@ -60,6 +60,7 @@ import {
   addPagoProveedorFactura,
   getReporteCuentasPorPagar,
   getReporteProveedoresPorUnidad,
+  getFinanzasGastosResumen,
   addCheckinOutImagen,
   deleteCheckinOutImagen,
   getCheckinOutRegistroById,
@@ -70,6 +71,7 @@ import {
   deleteClienteSoft,
   addClienteDocumento,
   deleteClienteDocumento,
+  getUsuariosCatalogoOperadores,
 } from './db.js';
 import {
   login,
@@ -367,6 +369,17 @@ app.post('/api/soporte/chat', requireAuth, async (req, res) => {
 
 app.get('/api/roles', (_req, res) => {
   res.json({ roles: Object.values(ROLES) });
+});
+
+/** Catálogo de operadores (rol operador) para asignación en rentas. */
+app.get('/api/usuarios/catalogo-operadores', requireAuth, requireEdicionFlota, (req, res) => {
+  try {
+    const rows = getUsuariosCatalogoOperadores();
+    res.json({ usuarios: rows.map((u) => ({ id: String(u.id), nombre: u.nombre || '' })) });
+  } catch (err) {
+    console.error('GET /api/usuarios/catalogo-operadores:', err);
+    res.status(500).json({ error: 'Error al cargar operadores' });
+  }
 });
 
 /* CRUD Usuarios (solo administrador) */
@@ -992,6 +1005,7 @@ app.get('/api/rentas/vencimientos', requireAuth, (req, res) => {
 /* CRUD Rentas */
 app.get('/api/rentas', requireAuth, (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const rentas = getAllRentas();
     res.json({ rentas });
   } catch (err) {
@@ -1162,6 +1176,7 @@ const uploadClienteDoc = multer({
 
 app.get('/api/clientes', requireAuth, requireAccesoClientes, (_req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.json({ clientes: getAllClientes() });
   } catch (err) {
     console.error('GET /api/clientes', err);
@@ -1171,6 +1186,7 @@ app.get('/api/clientes', requireAuth, requireAccesoClientes, (_req, res) => {
 
 app.get('/api/clientes/:id', requireAuth, requireAccesoClientes, (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const cliente = getClienteById(req.params.id);
     if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
     res.json({ cliente });
@@ -1386,6 +1402,18 @@ app.get('/api/proveedores/reportes/cuentas-pagar', ...proveedoresHandlers, (_req
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al generar reporte' });
+  }
+});
+
+/** Movimientos de gasto / CxP consolidados (administrador y supervisor). */
+app.get('/api/finanzas/gastos', ...proveedoresHandlers, (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    const lim = parseInt(String(req.query.limit ?? ''), 10);
+    res.json(getFinanzasGastosResumen(Number.isFinite(lim) ? lim : 200));
+  } catch (err) {
+    console.error('GET /api/finanzas/gastos', err);
+    res.status(500).json({ error: 'Error al cargar gastos' });
   }
 });
 

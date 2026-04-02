@@ -1,6 +1,6 @@
 import { Icon } from '@iconify/react';
 import { Link } from 'react-router-dom';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AreaChart,
   Area,
@@ -15,14 +15,16 @@ import {
   Legend,
 } from 'recharts';
 import { useAuth } from '../context/AuthContext';
-import type { User } from '../api/client';
+import type { RentaRow, User } from '../api/client';
 import {
   getAvatarUrl,
   getUnidades,
   getActividadReciente,
-  getRentasProximosVencimientos,
   getRentas,
 } from '../api/client';
+
+const COBRANZA_EPS = 0.005;
+const DIAS_POR_VENCER = 14;
 
 function welcomeDisplayName(u: User): string {
   const n = u.nombre?.trim();
@@ -178,6 +180,78 @@ function diasHasta(fechaStr: string): number {
   return Math.ceil((d.getTime() - hoy.getTime()) / 86400000);
 }
 
+function hoyISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function limitePorVencerISO(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + DIAS_POR_VENCER);
+  return d.toISOString().slice(0, 10);
+}
+
+function totalContratoRenta(r: RentaRow) {
+  return (r.monto ?? 0) + (r.deposito ?? 0);
+}
+
+function totalPagadoRenta(r: RentaRow) {
+  if (r.totalPagado != null) return r.totalPagado;
+  return (r.pagos ?? []).reduce((s, p) => s + p.monto, 0);
+}
+
+function saldoRenta(r: RentaRow) {
+  return totalContratoRenta(r) - totalPagadoRenta(r);
+}
+
+function etiquetaUnidadRenta(r: RentaRow) {
+  const eco = (r.numeroEconomico ?? '').trim();
+  return eco ? `${eco} · ${r.placas}` : r.placas;
+}
+
+type MiniListaProps = {
+  titulo: string;
+  icon: string;
+  vacio: string;
+  items: RentaRow[];
+  max?: number;
+  badge?: (r: RentaRow) => ReactNode;
+  subtitulo?: (r: RentaRow) => string | undefined;
+};
+
+function MiniListaRentas({ titulo, icon, vacio, items, max = 5, badge, subtitulo }: MiniListaProps) {
+  const slice = items.slice(0, max);
+  return (
+    <div className="rounded-lg border border-skyline-border/90 bg-skyline-bg/40 p-3">
+      <h4 className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-skyline-muted">
+        <Icon icon={icon} className="size-3.5 shrink-0 text-skyline-blue" aria-hidden />
+        {titulo}
+        <span className="ml-auto tabular-nums text-gray-500">({items.length})</span>
+      </h4>
+      <ul className="space-y-0">
+        {slice.length === 0 ? (
+          <li className="py-2 text-center text-xs text-skyline-muted">{vacio}</li>
+        ) : (
+          slice.map((r) => (
+            <li key={r.id} className="border-b border-skyline-border/80 last:border-0">
+              <Link
+                to={`/rentas/${r.id}`}
+                className="flex items-start justify-between gap-2 py-2 no-underline hover:bg-white/80 rounded-md -mx-1 px-1"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-gray-900">{etiquetaUnidadRenta(r)}</p>
+                  <p className="truncate text-[11px] text-gray-500">{r.clienteNombre}</p>
+                  {subtitulo?.(r) ? <p className="truncate text-[10px] text-gray-400">{subtitulo(r)}</p> : null}
+                </div>
+                {badge ? <div className="shrink-0">{badge(r)}</div> : null}
+              </Link>
+            </li>
+          ))
+        )}
+      </ul>
+    </div>
+  );
+}
+
 export function Dashboard() {
   const { hasRole, user } = useAuth();
   const [unidades, setUnidades] = useState<{ estatus: string }[]>([]);
@@ -185,29 +259,22 @@ export function Dashboard() {
   const [actividad, setActividad] = useState<
     { id: string; accion: string; detalle: string; fecha: string; icon: string; usuarioNombre?: string }[]
   >([]);
-  const [vencimientos, setVencimientos] = useState<
-    { id: string; placas: string; numeroEconomico?: string; clienteNombre: string; fechaFin: string }[]
-  >([]);
+  const [rentasFull, setRentasFull] = useState<RentaRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      getUnidades(),
-      getActividadReciente(10),
-      getRentasProximosVencimientos(14),
-      getRentas(),
-    ])
-      .then(([u, a, v, r]) => {
+    Promise.all([getUnidades(), getActividadReciente(10), getRentas()])
+      .then(([u, a, r]) => {
         setUnidades(u);
         setActividad(a);
-        setVencimientos(v);
+        setRentasFull(r);
         setFechasInicioRentas(r.map((item) => item.fechaInicio));
       })
       .catch(() => {
         setUnidades([]);
         setFechasInicioRentas([]);
         setActividad([]);
-        setVencimientos([]);
+        setRentasFull([]);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -247,6 +314,33 @@ export function Dashboard() {
   const pillars = allPillars.filter(
     (p) => !('roles' in p && p.roles) || hasRole(...(p.roles ?? []))
   );
+
+  const rentasPorVencerPanel = useMemo(() => {
+    const hoyStr = hoyISO();
+    const limiteStr = limitePorVencerISO();
+    const activaOReservada = (r: RentaRow) => r.estado === 'activa' || r.estado === 'reservada';
+
+    const porVencer = rentasFull
+      .filter((r) => activaOReservada(r) && r.fechaFin >= hoyStr && r.fechaFin <= limiteStr)
+      .sort((a, b) => a.fechaFin.localeCompare(b.fechaFin));
+
+    const vencidas = rentasFull
+      .filter((r) => activaOReservada(r) && r.fechaFin < hoyStr)
+      .sort((a, b) => b.fechaFin.localeCompare(a.fechaFin));
+
+    const liquidada = (r: RentaRow) => saldoRenta(r) <= COBRANZA_EPS;
+    const conAdeudo = (r: RentaRow) => saldoRenta(r) > COBRANZA_EPS;
+
+    const cobradas = rentasFull
+      .filter((r) => liquidada(r) && r.estado !== 'cancelada')
+      .sort((a, b) => (b.ultimaFechaPago || b.fechaFin).localeCompare(a.ultimaFechaPago || a.fechaFin));
+
+    const porCobrar = rentasFull
+      .filter(conAdeudo)
+      .sort((a, b) => saldoRenta(b) - saldoRenta(a));
+
+    return { porVencer, vencidas, cobradas, porCobrar };
+  }, [rentasFull]);
 
   return (
     <div className="mx-auto w-full max-w-6xl">
@@ -418,53 +512,99 @@ export function Dashboard() {
           </Link>
         </div>
         <div className="rounded-lg border border-skyline-border bg-white p-5 shadow-sm">
-          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-skyline-muted">
-            <Icon icon="mdi:calendar-alert" className="size-4" aria-hidden />
-            Rentas por vencer
+          <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-skyline-muted">
+            <Icon icon="mdi:calendar-multiple-check" className="size-4" aria-hidden />
+            Rentas y cobranza
           </h3>
-          <ul className="space-y-0">
-            {loading ? (
-              <li className="py-4 text-center text-sm text-skyline-muted">Cargando...</li>
-            ) : vencimientos.length === 0 ? (
-              <li className="py-4 text-center text-sm text-skyline-muted">No hay rentas por vencer en los próximos 14 días</li>
-            ) : (
-              vencimientos.map((v) => {
-                const dias = diasHasta(v.fechaFin);
-                const urgente = dias <= 2;
-                return (
-                  <Link
-                    key={v.id}
-                    to={`/rentas/${v.id}`}
-                    className={`flex items-center justify-between gap-3 border-b border-skyline-border py-3 last:border-0 last:pb-0 no-underline hover:bg-skyline-bg/50 ${
-                      urgente ? 'bg-amber-50/50 -mx-2 px-2 rounded-md' : ''
-                    }`}
-                  >
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">
-                        {(v.numeroEconomico ?? '').trim() ? `${(v.numeroEconomico ?? '').trim()} · ${v.placas}` : v.placas} —{' '}
-                        {v.clienteNombre}
-                      </p>
-                      <p className="text-xs text-gray-500">Vence: {formatFechaVencimiento(v.fechaFin)}</p>
-                    </div>
-                    {urgente ? (
-                      <span className="shrink-0 rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-700">
-                        {dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `${dias} días`}
+          <p className="mb-4 text-xs text-gray-500">
+            Por vencer (próximos {DIAS_POR_VENCER} días), vencidas sin cerrar, pendientes de cobro y liquidadas.
+          </p>
+          {loading ? (
+            <p className="py-6 text-center text-sm text-skyline-muted">Cargando...</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <MiniListaRentas
+                  titulo="Por vencer"
+                  icon="mdi:calendar-clock"
+                  vacio={`Ninguna en los próximos ${DIAS_POR_VENCER} días`}
+                  items={rentasPorVencerPanel.porVencer}
+                  badge={(r) => {
+                    const d = diasHasta(r.fechaFin);
+                    const urgente = d <= 2;
+                    return (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          urgente ? 'bg-amber-500/20 text-amber-800' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {d === 0 ? 'Hoy' : d === 1 ? 'Mañana' : `${d} d.`}
                       </span>
-                    ) : (
-                      <span className="shrink-0 text-xs text-skyline-muted">{dias} días</span>
-                    )}
-                  </Link>
-                );
-              })
-            )}
-          </ul>
-          <Link
-            to="/rentas"
-            className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-skyline-blue no-underline hover:underline"
-          >
-            Ver todas las rentas
-            <Icon icon="mdi:arrow-right" className="size-4" aria-hidden />
-          </Link>
+                    );
+                  }}
+                  subtitulo={(r) => `Vence ${formatFechaVencimiento(r.fechaFin)}`}
+                />
+                <MiniListaRentas
+                  titulo="Vencidas"
+                  icon="mdi:calendar-remove"
+                  vacio="Sin contratos vencidos (activos/reservados)"
+                  items={rentasPorVencerPanel.vencidas}
+                  badge={() => (
+                    <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-800">
+                      Vencida
+                    </span>
+                  )}
+                  subtitulo={(r) => `Fin ${formatFechaVencimiento(r.fechaFin)}`}
+                />
+                <MiniListaRentas
+                  titulo="Por cobrar"
+                  icon="mdi:cash-clock"
+                  vacio="Sin adeudos pendientes"
+                  items={rentasPorVencerPanel.porCobrar}
+                  badge={(r) => (
+                    <span className="whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
+                      ${saldoRenta(r).toLocaleString('es-MX')}
+                    </span>
+                  )}
+                  subtitulo={(r) =>
+                    `Contrato $${totalContratoRenta(r).toLocaleString('es-MX')} · Pagado $${totalPagadoRenta(r).toLocaleString('es-MX')}`
+                  }
+                />
+                <MiniListaRentas
+                  titulo="Cobradas"
+                  icon="mdi:cash-check"
+                  vacio="Aún no hay rentas liquidadas"
+                  items={rentasPorVencerPanel.cobradas}
+                  badge={() => (
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-800">
+                      Liquidado
+                    </span>
+                  )}
+                  subtitulo={(r) =>
+                    r.ultimaFechaPago
+                      ? `Último pago ${formatFechaVencimiento(r.ultimaFechaPago)}`
+                      : `Contrato $${totalContratoRenta(r).toLocaleString('es-MX')}`
+                  }
+                />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-3 border-t border-skyline-border pt-4">
+                <Link
+                  to="/rentas"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-skyline-blue no-underline hover:underline"
+                >
+                  Ver rentas
+                  <Icon icon="mdi:arrow-right" className="size-4" aria-hidden />
+                </Link>
+                <Link
+                  to="/pagos"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-skyline-blue no-underline hover:underline"
+                >
+                  Ver cobranza (pagos)
+                  <Icon icon="mdi:arrow-right" className="size-4" aria-hidden />
+                </Link>
+              </div>
+            </>
+          )}
         </div>
       </section>
     </div>

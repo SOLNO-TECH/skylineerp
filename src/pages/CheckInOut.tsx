@@ -1,6 +1,24 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Icon } from '@iconify/react';
-import { Link } from 'react-router-dom';
+import {
+  CRUD_CELDA_PRIMARIO_LEFT,
+  CRUD_CELDA_SEC_LEFT,
+  CRUD_FILTER_GRID,
+  CRUD_SEARCH_INNER,
+  CRUD_SEARCH_INPUT,
+  CRUD_SEARCH_LABEL,
+  CRUD_SELECT,
+  CRUD_TABLE,
+  CRUD_TABLE_OUTER,
+  CRUD_TBODY,
+  CRUD_THEAD_TR,
+  CRUD_TOOLBAR,
+  CrudActionGroup,
+  CrudActionIconButton,
+  CrudActionIconLink,
+  CrudTableTh,
+  crudTableRowClass,
+} from '../components/crud/crudCorporativo';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import {
@@ -518,6 +536,19 @@ export function CheckInOut() {
     }));
   }
 
+  function setTriRefCarroceria(id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      refrigeracion: {
+        ...prev.refrigeracion,
+        carroceriaRemolque: {
+          ...prev.refrigeracion.carroceriaRemolque,
+          items: { ...prev.refrigeracion.carroceriaRemolque.items, [id]: v },
+        },
+      },
+    }));
+  }
+
   const renderMulitaSecciones = (secs: MulitaSeccionDef[]) =>
     secs.map((sec) => (
       <div
@@ -645,58 +676,59 @@ export function CheckInOut() {
         </div>
 
         {!loading && (
-          <div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-50/50 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-end sm:px-5">
-            <div className="min-w-[min(100%,200px)] flex-1">
-              <label htmlFor="cio-busqueda" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
-                Buscar
-              </label>
-              <input
-                id="cio-busqueda"
-                type="search"
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                placeholder="Placas, cliente, colaborador, observaciones…"
-                className="input w-full"
-                autoComplete="off"
-              />
-            </div>
-            <div className="min-w-[130px]">
-              <label htmlFor="cio-tipo" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+          <div className={`${CRUD_TOOLBAR} mx-3 mb-0 mt-3 border-0 sm:mx-4`}>
+            <label htmlFor="cio-busqueda" className="block min-w-0 flex-1 lg:max-w-md">
+              <span className={CRUD_SEARCH_LABEL}>Buscar</span>
+              <div className={CRUD_SEARCH_INNER}>
+                <Icon icon="mdi:magnify" className="size-4 shrink-0 text-skyline-muted" aria-hidden />
+                <input
+                  id="cio-busqueda"
+                  type="search"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Placas, cliente, colaborador, observaciones…"
+                  className={CRUD_SEARCH_INPUT}
+                  autoComplete="off"
+                />
+              </div>
+            </label>
+            <div className={`${CRUD_FILTER_GRID} mt-2`}>
+              <label className={`block ${CRUD_SEARCH_LABEL}`}>
                 Movimiento
+                <select
+                  id="cio-tipo"
+                  value={filtroTipo}
+                  onChange={(e) => setFiltroTipo(e.target.value as '' | 'checkin' | 'checkout')}
+                  className={CRUD_SELECT}
+                >
+                  <option value="">Todos</option>
+                  <option value="checkin">Check-in</option>
+                  <option value="checkout">Check-out</option>
+                </select>
               </label>
-              <select
-                id="cio-tipo"
-                value={filtroTipo}
-                onChange={(e) => setFiltroTipo(e.target.value as '' | 'checkin' | 'checkout')}
-                className="input w-full"
-              >
-                <option value="">Todos</option>
-                <option value="checkin">Check-in</option>
-                <option value="checkout">Check-out</option>
-              </select>
-            </div>
-            <div className="min-w-[160px]">
-              <label htmlFor="cio-unidad" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+              <label className={`block ${CRUD_SEARCH_LABEL}`}>
                 Unidad
+                <select
+                  id="cio-unidad"
+                  value={filtroUnidadId}
+                  onChange={(e) => setFiltroUnidadId(e.target.value)}
+                  className={CRUD_SELECT}
+                >
+                  <option value="">Todas</option>
+                  {unidades.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {etiquetaUnidadLista(u)}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <select
-                id="cio-unidad"
-                value={filtroUnidadId}
-                onChange={(e) => setFiltroUnidadId(e.target.value)}
-                className="input w-full"
-              >
-                <option value="">Todas</option>
-                {unidades.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {etiquetaUnidadLista(u)}
-                  </option>
-                ))}
-              </select>
             </div>
             {hayFiltros && (
-              <button type="button" onClick={limpiarFiltros} className="btn btn-outline text-sm">
-                Limpiar filtros
-              </button>
+              <div className="mt-2">
+                <button type="button" onClick={limpiarFiltros} className="btn btn-outline btn-sm">
+                  Limpiar filtros
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -713,34 +745,58 @@ export function CheckInOut() {
             No hay registros que coincidan. Prueba otro texto de búsqueda o limpia los filtros.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left text-sm">
-              <thead className="border-b border-slate-200 bg-slate-100/90 text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                <tr>
-                  <th className="px-4 py-3">Fecha</th>
-                  <th className="px-4 py-3">Movimiento</th>
-                  <th className="hidden px-4 py-3 md:table-cell">Hoja</th>
-                  <th className="px-4 py-3">Unidad</th>
-                  <th className="px-4 py-3">Renta / cliente</th>
-                  <th className="px-4 py-3">Colaborador</th>
-                  <th className="hidden px-4 py-3 lg:table-cell">Registró</th>
-                  <th className="px-4 py-3">Km / comb.</th>
-                  <th className="px-4 py-3 text-right">Acciones</th>
+          <div className={`${CRUD_TABLE_OUTER} rounded-none border-x-0 border-b-0 shadow-none`}>
+            <table className={`${CRUD_TABLE} min-w-[820px] text-left`}>
+              <thead>
+                <tr className={CRUD_THEAD_TR}>
+                  <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 text-left align-middle" icon="mdi:calendar-clock" align="start">
+                    Fecha
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[6rem] px-2 py-3.5 text-left align-middle" icon="mdi:swap-horizontal" align="start">
+                    Movimiento
+                  </CrudTableTh>
+                  <CrudTableTh
+                    className="hidden min-w-[7rem] px-2 py-3.5 text-left align-middle md:table-cell"
+                    icon="mdi:file-document-outline"
+                    align="start"
+                  >
+                    Hoja
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[7rem] px-2 py-3.5 text-left align-middle" icon="mdi:truck-outline" align="start">
+                    Unidad
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[8rem] px-2 py-3.5 text-left align-middle" icon="mdi:briefcase-outline" align="start">
+                    Renta / cliente
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[7rem] px-2 py-3.5 text-left align-middle" icon="mdi:account-outline" align="start">
+                    Colaborador
+                  </CrudTableTh>
+                  <CrudTableTh
+                    className="hidden min-w-[6rem] px-2 py-3.5 text-left align-middle lg:table-cell"
+                    icon="mdi:account-badge-outline"
+                    align="start"
+                  >
+                    Registró
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[6rem] px-2 py-3.5 text-left align-middle" icon="mdi:gauge" align="start">
+                    Km / comb.
+                  </CrudTableTh>
+                  <CrudTableTh className="w-[1%] whitespace-nowrap px-2 py-3.5 text-center align-middle" icon="mdi:cog-outline" align="center">
+                    Acciones
+                  </CrudTableTh>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {registrosFiltrados.map((r) => {
+              <tbody className={CRUD_TBODY}>
+                {registrosFiltrados.map((r, rowIdx) => {
                   const { fecha, hora } = fechaRegistroPartes(r.creadoEn);
                   const nArchivos = r.imagenes?.length ?? 0;
                   const mod = r.modalidad ?? 'caja_seca';
                   return (
                   <tr
                     key={r.id}
-                    className={
-                      (soloLectura ? '' : 'cursor-pointer ') +
-                      'border-l-[3px] transition-colors hover:bg-slate-50/90 ' +
-                      (r.tipo === 'checkin' ? 'border-l-emerald-500' : 'border-l-blue-500')
-                    }
+                    className={`${crudTableRowClass(rowIdx, { clickable: !soloLectura })} border-l-[3px] ${
+                      r.tipo === 'checkin' ? 'border-l-emerald-500' : 'border-l-blue-500'
+                    }`}
                     onClick={() => !soloLectura && abrirEditar(r)}
                   >
                     <td className="px-4 py-3 text-slate-700">
@@ -774,20 +830,18 @@ export function CheckInOut() {
                         ) : null}
                       </div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 align-middle">
                       {(r.numeroEconomico ?? '').trim() ? (
                         <>
-                          <span className="font-mono text-base font-bold tracking-wide text-slate-900">
-                            {(r.numeroEconomico ?? '').trim()}
-                          </span>
-                          <span className="mt-0.5 block text-xs text-slate-600">
+                          <span className={`block ${CRUD_CELDA_PRIMARIO_LEFT}`}>{(r.numeroEconomico ?? '').trim()}</span>
+                          <span className={`mt-0.5 block text-xs ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>
                             {r.placas} · {r.marca} {r.modelo}
                           </span>
                         </>
                       ) : (
                         <>
-                          <span className="font-mono text-base font-bold tracking-wide text-slate-900">{r.placas}</span>
-                          <span className="mt-0.5 block text-xs text-slate-600">
+                          <span className={CRUD_CELDA_PRIMARIO_LEFT}>{r.placas}</span>
+                          <span className={`mt-0.5 block text-xs ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>
                             {r.marca} {r.modelo}
                           </span>
                         </>
@@ -800,13 +854,14 @@ export function CheckInOut() {
                             {r.rentaCliente}
                           </span>
                           {r.rentaId && (
-                            <Link
-                              to={`/rentas/${r.rentaId}`}
-                              className="btn btn-outline btn-sm mt-1 no-underline"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              Expediente
-                            </Link>
+                            <div className="mt-1 flex justify-start">
+                              <CrudActionIconLink
+                                to={`/rentas/${r.rentaId}`}
+                                icon="mdi:folder-outline"
+                                title="Ver expediente de renta"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </div>
                           )}
                         </>
                       ) : (
@@ -827,25 +882,20 @@ export function CheckInOut() {
                       <span className="mx-1 text-slate-300">·</span>
                       <span>{r.combustiblePct != null ? `${r.combustiblePct}% comb.` : '—'}</span>
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                       {soloLectura ? (
                         <span className="text-xs text-gray-400">—</span>
                       ) : (
-                        <div className="flex flex-wrap justify-end gap-1">
-                          <button
-                            type="button"
-                            className="btn btn-outline btn-sm"
-                            onClick={() => abrirEditar(r)}
-                          >
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-outline-danger btn-sm"
-                            onClick={(e) => eliminarRegistro(r, e)}
-                          >
-                            Borrar
-                          </button>
+                        <div className="flex flex-wrap justify-center gap-1">
+                          <CrudActionGroup aria-label="Acciones del registro">
+                            <CrudActionIconButton icon="mdi:pencil-outline" title="Editar registro" onClick={() => abrirEditar(r)} />
+                            <CrudActionIconButton
+                              icon="mdi:delete-outline"
+                              title="Eliminar registro"
+                              danger
+                              onClick={(e) => eliminarRegistro(r, e)}
+                            />
+                          </CrudActionGroup>
                         </div>
                       )}
                     </td>
@@ -1551,6 +1601,184 @@ export function CheckInOut() {
                         onChange={(v) => setTriRefPrueba(it.id, v)}
                       />
                     ))}
+                  </section>
+
+                  <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <h4 className="mb-3 flex items-center gap-2 border-b border-slate-100 pb-2 text-sm font-bold text-slate-900">
+                      <span className="flex size-7 items-center justify-center rounded-full bg-indigo-700 text-xs text-white">
+                        4
+                      </span>
+                      Carrocería del remolque refrigerado
+                    </h4>
+                    <p className="text-xs leading-relaxed text-slate-600">
+                      <span className="font-semibold uppercase tracking-wide text-slate-500">Hoja SKYLINE · remolque refrigerado.</span>{' '}
+                      Marca cada ítem: <strong>Bien</strong> (✔), <strong>Mal</strong> (X) o <strong>N/A</strong>, como en el
+                      formato impreso. Describe daños o croquis de carrocería al final.
+                    </p>
+                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                      {CAJA_SECA_SECCIONES.map((sec) => (
+                        <div
+                          key={sec.titulo}
+                          className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-900/[0.03]"
+                        >
+                          <p className="mb-2 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-skyline-blue">
+                            {sec.titulo}
+                          </p>
+                          <div className="max-h-96 overflow-y-auto pr-1">
+                            {sec.items.map((it) => (
+                              <TriPick
+                                key={it.id}
+                                label={it.label}
+                                value={inspeccion.refrigeracion.carroceriaRemolque.items[it.id] ?? ''}
+                                onChange={(v) => setTriRefCarroceria(it.id, v)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-4">
+                      <p className="mb-2 text-sm font-medium text-gray-800">Llantas</p>
+                      <div className="overflow-x-auto rounded-lg border border-skyline-border">
+                        <table className="w-full min-w-[640px] text-left text-xs">
+                          <thead className="bg-skyline-bg font-semibold text-gray-600">
+                            <tr>
+                              <th className="px-2 py-1.5">No.</th>
+                              <th className="px-2 py-1.5">Posición</th>
+                              <th className="px-2 py-1.5">Marca</th>
+                              <th className="px-2 py-1.5">Modelo</th>
+                              <th className="px-2 py-1.5">MM</th>
+                              <th className="px-2 py-1.5">Sellos</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-skyline-border">
+                            {inspeccion.refrigeracion.carroceriaRemolque.llantas.map((row, i) => (
+                              <tr key={i}>
+                                <td className="px-2 py-1 text-gray-500">{i + 1}</td>
+                                <td className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row.posicion}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.refrigeracion.carroceriaRemolque.llantas];
+                                        ll[i] = { ...ll[i], posicion: e.target.value };
+                                        return {
+                                          ...p,
+                                          refrigeracion: {
+                                            ...p.refrigeracion,
+                                            carroceriaRemolque: { ...p.refrigeracion.carroceriaRemolque, llantas: ll },
+                                          },
+                                        };
+                                      })
+                                    }
+                                  />
+                                </td>
+                                <td className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row.marca}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.refrigeracion.carroceriaRemolque.llantas];
+                                        ll[i] = { ...ll[i], marca: e.target.value };
+                                        return {
+                                          ...p,
+                                          refrigeracion: {
+                                            ...p.refrigeracion,
+                                            carroceriaRemolque: { ...p.refrigeracion.carroceriaRemolque, llantas: ll },
+                                          },
+                                        };
+                                      })
+                                    }
+                                  />
+                                </td>
+                                <td className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row.modelo}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.refrigeracion.carroceriaRemolque.llantas];
+                                        ll[i] = { ...ll[i], modelo: e.target.value };
+                                        return {
+                                          ...p,
+                                          refrigeracion: {
+                                            ...p.refrigeracion,
+                                            carroceriaRemolque: { ...p.refrigeracion.carroceriaRemolque, llantas: ll },
+                                          },
+                                        };
+                                      })
+                                    }
+                                  />
+                                </td>
+                                <td className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row.mm}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.refrigeracion.carroceriaRemolque.llantas];
+                                        ll[i] = { ...ll[i], mm: e.target.value };
+                                        return {
+                                          ...p,
+                                          refrigeracion: {
+                                            ...p.refrigeracion,
+                                            carroceriaRemolque: { ...p.refrigeracion.carroceriaRemolque, llantas: ll },
+                                          },
+                                        };
+                                      })
+                                    }
+                                  />
+                                </td>
+                                <td className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row.sellos}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.refrigeracion.carroceriaRemolque.llantas];
+                                        ll[i] = { ...ll[i], sellos: e.target.value };
+                                        return {
+                                          ...p,
+                                          refrigeracion: {
+                                            ...p.refrigeracion,
+                                            carroceriaRemolque: { ...p.refrigeracion.carroceriaRemolque, llantas: ll },
+                                          },
+                                        };
+                                      })
+                                    }
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <label className="mb-1 block text-sm font-medium text-gray-700">
+                        Daños de carrocería / notas (diagrama en papel)
+                      </label>
+                      <textarea
+                        value={inspeccion.refrigeracion.carroceriaRemolque.danosNotas}
+                        onChange={(e) =>
+                          setInspeccion((p) => ({
+                            ...p,
+                            refrigeracion: {
+                              ...p.refrigeracion,
+                              carroceriaRemolque: {
+                                ...p.refrigeracion.carroceriaRemolque,
+                                danosNotas: e.target.value,
+                              },
+                            },
+                          }))
+                        }
+                        className="input min-h-[72px] w-full resize-y text-sm"
+                        rows={3}
+                        placeholder="Describe daños o referencia a croquis…"
+                      />
+                    </div>
                   </section>
                 </div>
               )}

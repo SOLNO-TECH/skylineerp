@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Icon } from '@iconify/react';
 import { getReporteCuentasPorPagarApi, getReporteProveedoresPorUnidadApi } from '../api/client';
 import type { FacturaPendienteReporte, ReportePorUnidad } from '../api/client';
+import {
+  CRUD_CELDA_SEC_LEFT,
+  CRUD_TABLE,
+  CRUD_TABLE_OUTER,
+  CRUD_TBODY,
+  CRUD_THEAD_TR,
+  CrudActionGroup,
+  CrudActionIconButton,
+  CrudTableTh,
+  crudTableRowClass,
+} from '../components/crud/crudCorporativo';
 import { etiquetaUnidadLista } from '../lib/unidadDisplay';
 
 function fmtMoney(n: number) {
@@ -93,10 +103,9 @@ export function ProveedoresReportes() {
       <section className="rounded-xl border border-skyline-border bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-gray-900">Resumen por proveedor</h2>
-          <button type="button" className="btn btn-outline text-sm" onClick={load}>
-            <Icon icon="mdi:refresh" className="size-4" aria-hidden />
-            Actualizar
-          </button>
+          <CrudActionGroup aria-label="Datos del reporte">
+            <CrudActionIconButton icon="mdi:refresh" title="Actualizar datos" disabled={loading} onClick={load} />
+          </CrudActionGroup>
         </div>
         <p className="mt-1 text-sm text-gray-500">Cuánto se adeuda a cada proveedor (saldo &gt; 0).</p>
         {proveedoresConSaldo.length === 0 ? (
@@ -170,21 +179,31 @@ export function ProveedoresReportes() {
             No hay facturas de proveedores ligadas a unidades. Al registrar facturas, asigna la unidad cuando aplique.
           </p>
         ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className={`${CRUD_TABLE_OUTER} mt-4`}>
+            <table className={CRUD_TABLE}>
               <thead>
-                <tr className="border-b border-skyline-border bg-skyline-bg">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-gray-700">Unidad</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-700">Facturas</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-700">Facturado</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-700">Pagado</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-gray-700">Saldo</th>
+                <tr className={CRUD_THEAD_TR}>
+                  <CrudTableTh className="min-w-[10rem] px-2 py-3 text-left align-middle" icon="mdi:truck-outline" align="start">
+                    Unidad
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[4rem] px-2 py-3 text-right align-middle" icon="mdi:file-multiple-outline" align="end">
+                    Facturas
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3 text-right align-middle" icon="mdi:receipt-text-outline" align="end">
+                    Facturado
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3 text-right align-middle" icon="mdi:cash-check" align="end">
+                    Pagado
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3 text-right align-middle" icon="mdi:scale-balance" align="end">
+                    Saldo
+                  </CrudTableTh>
                 </tr>
               </thead>
-              <tbody>
-                {porUnidad.map((u) => (
-                  <tr key={u.unidadId} className="border-b border-skyline-border hover:bg-gray-50/80">
-                    <td className="px-3 py-2 font-medium text-gray-900">
+              <tbody className={CRUD_TBODY}>
+                {porUnidad.map((u, rowIdx) => (
+                  <tr key={u.unidadId} className={crudTableRowClass(rowIdx)}>
+                    <td className={`px-3 py-2.5 align-middle font-semibold text-slate-900 ${CRUD_CELDA_SEC_LEFT}`}>
                       {etiquetaUnidadLista({
                         numeroEconomico: u.numeroEconomico ?? '',
                         placas: u.placas,
@@ -192,10 +211,10 @@ export function ProveedoresReportes() {
                         modelo: u.modelo,
                       })}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-gray-600">{u.numFacturas}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(u.totalFacturado)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-emerald-700">{fmtMoney(u.totalPagado)}</td>
-                    <td className="px-3 py-2 text-right font-medium tabular-nums text-amber-600">
+                    <td className={`px-3 py-2.5 text-right align-middle tabular-nums ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>{u.numFacturas}</td>
+                    <td className={`px-3 py-2.5 text-right align-middle tabular-nums ${CRUD_CELDA_SEC_LEFT}`}>{fmtMoney(u.totalFacturado)}</td>
+                    <td className={`px-3 py-2.5 text-right align-middle tabular-nums text-emerald-700 ${CRUD_CELDA_SEC_LEFT}`}>{fmtMoney(u.totalPagado)}</td>
+                    <td className={`px-3 py-2.5 text-right align-middle font-semibold tabular-nums text-amber-600 ${CRUD_CELDA_SEC_LEFT}`}>
                       {fmtMoney(u.saldoPendiente)}
                     </td>
                   </tr>

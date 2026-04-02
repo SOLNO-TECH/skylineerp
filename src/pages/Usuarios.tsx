@@ -1,6 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '@iconify/react';
 import {
+  CRUD_CELDA_SEC,
+  CRUD_ERROR_BANNER,
+  CRUD_FILTER_PILL,
+  CRUD_FILTER_PILL_ACTIVE,
+  CRUD_HEADER_ROW,
+  CRUD_PAGE_SUBTITLE,
+  CRUD_PAGE_TITLE,
+  CRUD_SEARCH_INNER,
+  CRUD_SEARCH_INPUT,
+  CRUD_SEARCH_LABEL,
+  CRUD_SPINNER,
+  CRUD_SPINNER_WRAP,
+  CRUD_TABLE,
+  CRUD_TABLE_OUTER,
+  CRUD_TBODY,
+  CRUD_THEAD_TR,
+  CRUD_TOOLBAR,
+  CrudActionGroup,
+  CrudActionIconButton,
+  CrudTableTh,
+  crudTableRowClass,
+} from '../components/crud/crudCorporativo';
+import {
   getUsuarios,
   createUsuario,
   updateUsuario,
@@ -167,10 +190,10 @@ export function Usuarios() {
 
   return (
     <div>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+      <header className={CRUD_HEADER_ROW}>
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Usuarios</h1>
-          <p className="mt-1 text-sm font-medium text-gray-500">
+          <h1 className={CRUD_PAGE_TITLE}>Usuarios</h1>
+          <p className={CRUD_PAGE_SUBTITLE}>
             Alta, roles y permisos. Busca por nombre o correo y filtra por rol o estado.
           </p>
         </div>
@@ -180,25 +203,21 @@ export function Usuarios() {
         </button>
       </header>
 
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm font-medium text-red-600">
-          {error}
-        </div>
-      )}
+      {error && <div className={CRUD_ERROR_BANNER}>{error}</div>}
 
-      <div className="mb-5 rounded-lg border border-skyline-border bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex-1 min-w-0">
-            <label className="text-sm font-medium text-gray-700">
-              Buscar
-              <div className="mt-1 flex items-center gap-2 rounded-md border border-skyline-border bg-white px-3 py-2 transition-colors focus-within:border-skyline-blue focus-within:ring-1 focus-within:ring-skyline-blue">
-                <Icon icon="mdi:magnify" className="size-5 shrink-0 text-skyline-muted" aria-hidden />
+      <div className={CRUD_TOOLBAR}>
+        <div className="space-y-4">
+          <div>
+            <label className="block max-w-xl">
+              <span className={CRUD_SEARCH_LABEL}>Buscar</span>
+              <div className={CRUD_SEARCH_INNER}>
+                <Icon icon="mdi:magnify" className="size-4 shrink-0 text-skyline-muted" aria-hidden />
                 <input
                   type="search"
                   value={busqueda}
                   onChange={(e) => setBusqueda(e.target.value)}
                   placeholder="Nombre o correo electrónico…"
-                  className="w-full min-w-0 border-0 bg-transparent text-sm outline-none placeholder:text-gray-400"
+                  className={CRUD_SEARCH_INPUT}
                   autoComplete="off"
                 />
                 {busqueda.trim() !== '' && (
@@ -215,239 +234,227 @@ export function Usuarios() {
             </label>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-            <div>
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-500">Rol</span>
-              <div className="flex flex-wrap gap-2">
+          <div className="border-t border-slate-100 pt-3">
+            <span className="mb-2 block text-xs font-medium text-gray-600">Rol</span>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setFiltroRol('Todos')}
+                className={filtroRol === 'Todos' ? CRUD_FILTER_PILL_ACTIVE : CRUD_FILTER_PILL}
+              >
+                Todos{' '}
+                <span className={filtroRol === 'Todos' ? 'font-bold text-white/95' : 'font-medium text-gray-400'}>
+                  ({conteosEstado.total})
+                </span>
+              </button>
+              {roles.map((r) => (
                 <button
+                  key={r}
                   type="button"
-                  onClick={() => setFiltroRol('Todos')}
-                  className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
-                    filtroRol === 'Todos'
-                      ? 'border-skyline-blue bg-skyline-blue text-white'
-                      : 'border-skyline-border bg-white text-gray-600 hover:border-skyline-blue hover:text-skyline-blue'
-                  }`}
+                  onClick={() => setFiltroRol(r)}
+                  className={filtroRol === r ? CRUD_FILTER_PILL_ACTIVE : CRUD_FILTER_PILL}
                 >
-                  Todos <span className={filtroRol === 'Todos' ? 'text-white/90' : 'text-gray-400'}>({conteosEstado.total})</span>
+                  {ROLES_LABEL[r] ?? r}{' '}
+                  <span className={filtroRol === r ? 'font-bold text-white/95' : 'font-medium text-gray-400'}>
+                    ({conteosRol[r] ?? 0})
+                  </span>
                 </button>
-                {roles.map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => setFiltroRol(r)}
-                    className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
-                      filtroRol === r
-                        ? 'border-skyline-blue bg-skyline-blue text-white'
-                        : 'border-skyline-border bg-white text-gray-600 hover:border-skyline-blue hover:text-skyline-blue'
-                    }`}
-                  >
-                    {ROLES_LABEL[r] ?? r}{' '}
-                    <span className={filtroRol === r ? 'text-white/90' : 'text-gray-400'}>({conteosRol[r] ?? 0})</span>
-                  </button>
-                ))}
-              </div>
+              ))}
             </div>
-            <div>
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-500">Estado</span>
-              <div className="flex flex-wrap gap-2">
-                {(
-                  [
-                    { k: 'todos' as const, label: 'Todos', n: conteosEstado.total },
-                    { k: 'activos' as const, label: 'Activos', n: conteosEstado.activos },
-                    { k: 'inactivos' as const, label: 'Inactivos', n: conteosEstado.inactivos },
-                  ]
-                ).map(({ k, label, n }) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setFiltroEstado(k)}
-                    className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
-                      filtroEstado === k
-                        ? 'border-skyline-blue bg-skyline-blue text-white'
-                        : 'border-skyline-border bg-white text-gray-600 hover:border-skyline-blue hover:text-skyline-blue'
-                    }`}
-                  >
-                    {label} <span className={filtroEstado === k ? 'text-white/90' : 'text-gray-400'}>({n})</span>
-                  </button>
-                ))}
-              </div>
+          </div>
+
+          <div className="border-t border-slate-100 pt-3">
+            <span className="mb-2 block text-xs font-medium text-gray-600">Estado</span>
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  { k: 'todos' as const, label: 'Todos', n: conteosEstado.total },
+                  { k: 'activos' as const, label: 'Activos', n: conteosEstado.activos },
+                  { k: 'inactivos' as const, label: 'Inactivos', n: conteosEstado.inactivos },
+                ]
+              ).map(({ k, label, n }) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setFiltroEstado(k)}
+                  className={filtroEstado === k ? CRUD_FILTER_PILL_ACTIVE : CRUD_FILTER_PILL}
+                >
+                  {label}{' '}
+                  <span className={filtroEstado === k ? 'font-bold text-white/95' : 'font-medium text-gray-400'}>
+                    ({n})
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
         {!loading && (
-          <p className="mt-4 text-sm text-gray-500">
-            Mostrando <span className="font-semibold text-gray-900">{filtrados.length}</span> de{' '}
-            <span className="font-semibold text-gray-900">{usuarios.length}</span> usuarios
+          <p className="mt-3 text-xs leading-relaxed text-gray-600">
+            <span className="font-semibold text-gray-900">
+              {filtrados.length} de {usuarios.length}
+            </span>{' '}
+            usuarios
             {filtrados.length !== usuarios.length && (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm ml-2"
-                onClick={() => {
-                  setBusqueda('');
-                  setFiltroRol('Todos');
-                  setFiltroEstado('todos');
-                }}
-              >
-                Quitar filtros
-              </button>
+              <span className="ml-2 inline-flex align-middle">
+                <CrudActionGroup aria-label="Filtros">
+                  <CrudActionIconButton
+                    icon="mdi:filter-remove-outline"
+                    title="Quitar filtros"
+                    onClick={() => {
+                      setBusqueda('');
+                      setFiltroRol('Todos');
+                      setFiltroEstado('todos');
+                    }}
+                  />
+                </CrudActionGroup>
+              </span>
             )}
           </p>
         )}
       </div>
 
-      <div className="rounded-lg border border-skyline-border bg-white shadow-sm">
+      <div className={CRUD_TABLE_OUTER}>
         {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-skyline-border border-t-skyline-blue" />
+          <div className={CRUD_SPINNER_WRAP}>
+            <div className={CRUD_SPINNER} />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-skyline-border bg-skyline-bg">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Nombre</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Email</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Rol</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Estado</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
+          <table className={CRUD_TABLE}>
+            <thead>
+              <tr className={CRUD_THEAD_TR}>
+                <CrudTableTh className="min-w-[8rem] px-2 py-3.5 text-center align-middle" icon="mdi:account-outline">
+                  Nombre
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[10rem] px-2 py-3.5 text-center align-middle" icon="mdi:email-outline">
+                  Email
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[7rem] px-2 py-3.5 text-center align-middle" icon="mdi:shield-account-outline">
+                  Rol
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[5rem] px-2 py-3.5 text-center align-middle" icon="mdi:toggle-switch-outline">
+                  Estado
+                </CrudTableTh>
+                <CrudTableTh className="w-[1%] whitespace-nowrap px-2 py-3.5 text-center align-middle" icon="mdi:cog-outline">
+                  Acciones
+                </CrudTableTh>
+              </tr>
+            </thead>
+            <tbody className={CRUD_TBODY}>
                 {filtrados.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-12 text-center text-gray-500">
+                    <td colSpan={5} className="px-4 py-12 text-center text-sm text-slate-500">
                       {usuarios.length === 0 ? (
                         'No hay usuarios registrados. Crea el primero con «Nuevo usuario».'
                       ) : (
                         <>
                           Ningún usuario coincide con la búsqueda o los filtros.{' '}
-                          <button
-                            type="button"
-                            className="btn btn-outline btn-sm"
-                            onClick={() => {
-                              setBusqueda('');
-                              setFiltroRol('Todos');
-                              setFiltroEstado('todos');
-                            }}
-                          >
-                            Limpiar filtros
-                          </button>
+                          <span className="inline-flex align-middle">
+                            <CrudActionGroup aria-label="Filtros">
+                              <CrudActionIconButton
+                                icon="mdi:filter-remove-outline"
+                                title="Limpiar filtros"
+                                onClick={() => {
+                                  setBusqueda('');
+                                  setFiltroRol('Todos');
+                                  setFiltroEstado('todos');
+                                }}
+                              />
+                            </CrudActionGroup>
+                          </span>
                         </>
                       )}
                     </td>
                   </tr>
                 )}
-                {filtrados.map((u) => (
-                  <tr key={u.id} className="border-b border-skyline-border last:border-0 hover:bg-skyline-blue/[0.04]">
-                    <td className="px-4 py-3 font-medium text-gray-900">{u.nombre}</td>
-                    <td className="px-4 py-3 text-gray-600">{u.email}</td>
-                    <td className="px-4 py-3">
-                      <span className="rounded-full bg-skyline-blue/10 px-2.5 py-0.5 text-xs font-medium capitalize text-skyline-blue">
+                {filtrados.map((u, rowIdx) => (
+                  <tr key={u.id} className={crudTableRowClass(rowIdx)}>
+                    <td className="px-3 py-2.5 text-center align-middle font-sans text-[13px] font-semibold leading-normal text-slate-900 antialiased">
+                      {u.nombre}
+                    </td>
+                    <td className={`px-3 py-2.5 text-center align-middle text-slate-600 ${CRUD_CELDA_SEC}`}>{u.email}</td>
+                    <td className="px-3 py-2.5 text-center align-middle">
+                      <span className="inline-flex rounded-full bg-skyline-blue/10 px-2.5 py-0.5 text-xs font-medium capitalize text-skyline-blue">
                         {ROLES_LABEL[u.rol] ?? u.rol}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className={`px-3 py-2.5 text-center align-middle ${CRUD_CELDA_SEC}`}>
                       {u.activo ? (
-                        <span className="text-emerald-600 font-medium">Activo</span>
+                        <span className="font-medium text-emerald-600">Activo</span>
                       ) : (
                         <span className="text-skyline-muted">Inactivo</span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap items-center justify-end gap-2">
+                    <td className="px-3 py-2.5 text-center align-middle">
+                      <div className="flex flex-col items-center justify-center gap-2 sm:flex-row sm:flex-wrap">
                         {confirmDesactivar === u.id ? (
                           <>
                             <span className="text-xs text-gray-500">¿Desactivar usuario?</span>
-                            <button
-                              type="button"
-                              className="btn btn-outline btn-sm"
-                              onClick={() => setConfirmDesactivar(null)}
-                            >
-                              Cancelar
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-outline-danger btn-sm"
-                              onClick={() => handleDesactivar(u.id)}
-                            >
-                              <Icon icon="mdi:account-off-outline" className="size-4 shrink-0" aria-hidden />
-                              Desactivar
-                            </button>
+                            <CrudActionGroup aria-label="Confirmar desactivación">
+                              <CrudActionIconButton icon="mdi:close" title="Cancelar" onClick={() => setConfirmDesactivar(null)} />
+                              <CrudActionIconButton
+                                icon="mdi:account-off-outline"
+                                title="Desactivar usuario"
+                                danger
+                                onClick={() => handleDesactivar(u.id)}
+                              />
+                            </CrudActionGroup>
                           </>
                         ) : confirmEliminar === u.id ? (
                           <>
-                            <span className="max-w-[220px] text-right text-xs leading-snug text-gray-500">
+                            <span className="max-w-[220px] text-center text-xs leading-snug text-gray-500 sm:text-right">
                               ¿Eliminar definitivamente? Esta acción no se puede deshacer.
                             </span>
-                            <button
-                              type="button"
-                              className="btn btn-outline btn-sm"
-                              onClick={() => setConfirmEliminar(null)}
-                            >
-                              Cancelar
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-outline-danger btn-sm"
-                              onClick={() => handleEliminarDefinitivo(u.id)}
-                            >
-                              <Icon icon="mdi:delete-forever-outline" className="size-4 shrink-0" aria-hidden />
-                              Eliminar
-                            </button>
+                            <CrudActionGroup aria-label="Confirmar eliminación">
+                              <CrudActionIconButton icon="mdi:close" title="Cancelar" onClick={() => setConfirmEliminar(null)} />
+                              <CrudActionIconButton
+                                icon="mdi:delete-forever-outline"
+                                title="Eliminar definitivamente"
+                                danger
+                                onClick={() => handleEliminarDefinitivo(u.id)}
+                              />
+                            </CrudActionGroup>
                           </>
                         ) : (
-                          <>
-                            <button
-                              type="button"
+                          <CrudActionGroup aria-label="Acciones del usuario">
+                            <CrudActionIconButton
+                              icon="mdi:pencil-outline"
+                              title="Editar usuario"
                               onClick={() => {
                                 setConfirmDesactivar(null);
                                 setConfirmEliminar(null);
                                 openEdit(u);
                               }}
-                              title="Editar usuario"
-                              className="btn btn-outline btn-sm"
-                            >
-                              <Icon icon="mdi:pencil-outline" className="size-4 shrink-0" aria-hidden />
-                              Editar
-                            </button>
+                            />
                             {u.activo && u.id !== currentUser?.id && (
-                              <button
-                                type="button"
+                              <CrudActionIconButton
+                                icon="mdi:account-off-outline"
+                                title="Desactivar usuario"
                                 onClick={() => {
                                   setConfirmEliminar(null);
                                   setConfirmDesactivar(u.id);
                                 }}
-                                title="Desactivar usuario"
-                                className="btn btn-outline-secondary btn-sm"
-                              >
-                                <Icon icon="mdi:account-off-outline" className="size-4 shrink-0" aria-hidden />
-                                Desactivar
-                              </button>
+                              />
                             )}
                             {!u.activo && u.id !== currentUser?.id && (
-                              <button
-                                type="button"
+                              <CrudActionIconButton
+                                icon="mdi:delete-forever-outline"
+                                title="Eliminar usuario definitivamente"
+                                danger
                                 onClick={() => {
                                   setConfirmDesactivar(null);
                                   setConfirmEliminar(u.id);
                                 }}
-                                title="Eliminar usuario definitivamente"
-                                className="btn btn-outline-danger btn-sm"
-                              >
-                                <Icon icon="mdi:delete-forever-outline" className="size-4 shrink-0" aria-hidden />
-                                Eliminar
-                              </button>
+                              />
                             )}
-                          </>
+                          </CrudActionGroup>
                         )}
                       </div>
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
-          </div>
+            </tbody>
+          </table>
         )}
       </div>
 

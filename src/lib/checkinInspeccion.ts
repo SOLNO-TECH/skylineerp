@@ -44,8 +44,9 @@ export type InspeccionCajaSeca = {
 };
 
 /**
- * Inspección operativa de unidad de refrigeración (3 bloques en UI):
- * 1) Datos del equipo + condiciones + fugas; 2) Control de temperatura; 3) Prueba de funcionamiento.
+ * Inspección operativa de unidad de refrigeración:
+ * 1) Datos del equipo + condiciones + fugas; 2) Control de temperatura; 3) Prueba de funcionamiento;
+ * 4) Carrocería del remolque (misma hoja SKYLINE · caja seca: ítems Tri, llantas, notas).
  */
 export type InspeccionRefrigeracion = {
   equipo: {
@@ -74,6 +75,8 @@ export type InspeccionRefrigeracion = {
   prueba: Record<string, Tri>;
   /** Reservado por compatibilidad con registros antiguos (ya no se muestra en el formulario). */
   unidadFrigorifica: Record<string, Tri>;
+  /** Checklist de carrocería del remolque (mismos ítems que modalidad caja seca). */
+  carroceriaRemolque: InspeccionCajaSeca;
 };
 
 export type InspeccionMulita = {
@@ -444,6 +447,11 @@ export function defaultInspeccionCompleta(): InspeccionCompleta {
       },
       prueba,
       unidadFrigorifica,
+      carroceriaRemolque: {
+        items: triRecord(collectCajaSecaIds()),
+        llantas: emptyLlantas8(),
+        danosNotas: '',
+      },
     },
     mulita: {
       datos: {
@@ -485,6 +493,18 @@ export function mergeInspeccionGuardada(raw: unknown): InspeccionCompleta {
         ...base.refrigeracion.unidadFrigorifica,
         ...(o.refrigeracion?.unidadFrigorifica || {}),
       },
+      carroceriaRemolque: (() => {
+        const cr = o.refrigeracion?.carroceriaRemolque;
+        const baseCr = base.refrigeracion.carroceriaRemolque;
+        return {
+          items: { ...baseCr.items, ...(cr?.items || {}) },
+          llantas:
+            Array.isArray(cr?.llantas) && cr.llantas.length === baseCr.llantas.length
+              ? cr.llantas.map((r, i) => ({ ...baseCr.llantas[i], ...r }))
+              : baseCr.llantas,
+          danosNotas: cr?.danosNotas ?? baseCr.danosNotas,
+        };
+      })(),
     },
     mulita: {
       datos: { ...base.mulita.datos, ...(o.mulita?.datos || {}) },

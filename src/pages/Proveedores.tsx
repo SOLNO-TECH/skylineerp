@@ -2,6 +2,27 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetState
 import { Link, useNavigate } from 'react-router-dom';
 import { Icon } from '@iconify/react';
 import {
+  CRUD_CELDA_SEC_LEFT,
+  CRUD_ERROR_BANNER,
+  CRUD_HEADER_ROW,
+  CRUD_PAGE_SUBTITLE,
+  CRUD_PAGE_TITLE,
+  CRUD_SEARCH_INNER,
+  CRUD_SEARCH_INPUT,
+  CRUD_SEARCH_LABEL,
+  CRUD_SPINNER,
+  CRUD_SPINNER_WRAP,
+  CRUD_TABLE,
+  CRUD_TABLE_OUTER,
+  CRUD_TBODY,
+  CRUD_THEAD_TR,
+  CRUD_TOOLBAR,
+  CrudActionGroup,
+  CrudActionIconButton,
+  CrudTableTh,
+  crudTableRowClass,
+} from '../components/crud/crudCorporativo';
+import {
   getProveedores,
   createProveedorApi,
   updateProveedorApi,
@@ -316,10 +337,13 @@ export function Proveedores() {
 
   return (
     <div>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-gray-500">
-          {loading ? 'Cargando…' : `${filtrados.length} de ${lista.length} proveedores`}
-        </p>
+      <header className={CRUD_HEADER_ROW}>
+        <div>
+          <h2 className={CRUD_PAGE_TITLE}>Proveedores</h2>
+          <p className={CRUD_PAGE_SUBTITLE}>
+            Directorio fiscal, facturas y vínculo con mantenimiento. Desde aquí das de alta y abres el expediente.
+          </p>
+        </div>
         <button
           type="button"
           className="btn btn-primary"
@@ -339,133 +363,130 @@ export function Proveedores() {
           <Icon icon="mdi:plus" className="size-5" aria-hidden />
           Nuevo proveedor
         </button>
-      </div>
+      </header>
 
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm font-medium text-red-600">{error}</div>
-      )}
+      {error && <div className={CRUD_ERROR_BANNER}>{error}</div>}
 
-      <div className="mb-4 rounded-lg border border-skyline-border bg-white p-4 shadow-sm">
-        <label className="text-sm font-medium text-gray-700">
-          Buscar
-          <div className="mt-1 flex items-center gap-2 rounded-md border border-skyline-border px-3 py-2 focus-within:border-skyline-blue focus-within:ring-1 focus-within:ring-skyline-blue">
-            <Icon icon="mdi:magnify" className="size-5 text-skyline-muted" aria-hidden />
+      <div className={CRUD_TOOLBAR}>
+        <label className="block min-w-0 flex-1 lg:max-w-md">
+          <span className={CRUD_SEARCH_LABEL}>Buscar</span>
+          <div className={CRUD_SEARCH_INNER}>
+            <Icon icon="mdi:magnify" className="size-4 shrink-0 text-skyline-muted" aria-hidden />
             <input
               type="search"
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
               placeholder="Razón social, RFC, correo o contacto…"
-              className="w-full border-0 bg-transparent text-sm outline-none"
+              className={CRUD_SEARCH_INPUT}
             />
           </div>
         </label>
+        <p className="mt-2 text-xs leading-relaxed text-gray-600">
+          <span className="font-semibold text-gray-900">
+            {loading ? '…' : `${filtrados.length} de ${lista.length}`}
+          </span>{' '}
+          proveedores en el directorio.
+        </p>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-skyline-border bg-white shadow-sm">
+      <div className={CRUD_TABLE_OUTER}>
         {loading ? (
-          <div className="flex justify-center py-16">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-skyline-border border-t-skyline-blue" />
+          <div className={CRUD_SPINNER_WRAP}>
+            <div className={CRUD_SPINNER} />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-skyline-border bg-skyline-bg">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">
-                    Proveedor
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">
-                    RFC
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">
-                    Contacto
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700">
-                    Facturado
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700">
-                    Pagado
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700">
-                    Saldo
-                  </th>
-                  <th
-                    className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700"
-                    title="Suma de costos de mantenimiento vinculados a este proveedor"
-                  >
-                    Mantenimiento
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-700">
-                    Acciones
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
+          <table className={`${CRUD_TABLE} min-w-[960px]`}>
+            <thead>
+              <tr className={CRUD_THEAD_TR}>
+                <CrudTableTh className="min-w-[10rem] px-2 py-3.5 text-left align-middle" icon="mdi:domain" align="start">
+                  Proveedor
+                </CrudTableTh>
+                <CrudTableTh className="w-[6.5rem] px-2 py-3.5 text-left align-middle" icon="mdi:identifier" align="start">
+                  RFC
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[8rem] px-2 py-3.5 text-left align-middle" icon="mdi:account-outline" align="start">
+                  Contacto
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 text-right align-middle" icon="mdi:receipt-text-outline" align="end">
+                  Facturado
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 text-right align-middle" icon="mdi:cash-check" align="end">
+                  Pagado
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 text-right align-middle" icon="mdi:scale-balance" align="end">
+                  Saldo
+                </CrudTableTh>
+                <CrudTableTh
+                  className="min-w-[5.5rem] px-2 py-3.5 text-right align-middle"
+                  icon="mdi:wrench-outline"
+                  align="end"
+                  title="Suma de costos de mantenimiento vinculados a este proveedor"
+                >
+                  Mantenimiento
+                </CrudTableTh>
+                <CrudTableTh className="w-[1%] whitespace-nowrap px-2 py-3.5 text-center align-middle" icon="mdi:cog-outline" align="center">
+                  Acciones
+                </CrudTableTh>
+              </tr>
+            </thead>
+            <tbody className={CRUD_TBODY}>
                 {filtrados.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-gray-500">
+                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-500">
                       {lista.length === 0
                         ? 'No hay proveedores. Crea uno con «Nuevo proveedor».'
                         : 'Ningún resultado para la búsqueda.'}
                     </td>
                   </tr>
                 )}
-                {filtrados.map((p) => (
-                  <tr key={p.id} className="border-b border-skyline-border last:border-0 hover:bg-skyline-blue/[0.04]">
-                    <td className="px-4 py-3">
-                      <span className="font-medium text-gray-900">{p.nombreRazonSocial}</span>
+                {filtrados.map((p, rowIdx) => (
+                  <tr key={p.id} className={crudTableRowClass(rowIdx)}>
+                    <td className={`px-3 py-2.5 align-middle font-semibold text-slate-900 ${CRUD_CELDA_SEC_LEFT}`}>
+                      {p.nombreRazonSocial}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{p.rfc || '—'}</td>
-                    <td className="max-w-[200px] px-4 py-3 text-gray-600">
+                    <td className={`px-3 py-2.5 align-middle tabular-nums ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>{p.rfc || '—'}</td>
+                    <td className={`max-w-[200px] px-3 py-2.5 align-middle ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>
                       <span className="line-clamp-2">
                         {p.contactoNombre || p.contactoEmail || p.contactoTelefono || '—'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-gray-800">{fmtMoney(p.totalFacturado)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-gray-800">{fmtMoney(p.totalPagado)}</td>
+                    <td className={`px-3 py-2.5 text-right align-middle tabular-nums ${CRUD_CELDA_SEC_LEFT}`}>{fmtMoney(p.totalFacturado)}</td>
+                    <td className={`px-3 py-2.5 text-right align-middle tabular-nums ${CRUD_CELDA_SEC_LEFT}`}>{fmtMoney(p.totalPagado)}</td>
                     <td
-                      className={`px-4 py-3 text-right font-semibold tabular-nums ${
+                      className={`px-3 py-2.5 text-right align-middle font-semibold tabular-nums ${CRUD_CELDA_SEC_LEFT} ${
                         p.saldoPendiente > 0.01 ? 'text-amber-600' : 'text-emerald-600'
                       }`}
                     >
                       {fmtMoney(p.saldoPendiente)}
                     </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-violet-800">
+                    <td className={`px-3 py-2.5 text-right align-middle tabular-nums text-violet-800 ${CRUD_CELDA_SEC_LEFT}`}>
                       {fmtMoney(p.totalMantenimiento ?? 0)}
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <button
-                          type="button"
-                          className="btn btn-outline-secondary btn-sm"
-                          onClick={() => abrirEditar(p)}
-                        >
-                          <Icon icon="mdi:pencil-outline" className="size-4" aria-hidden />
-                          Editar
-                        </button>
+                    <td className="px-3 py-2.5 text-center align-middle">
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <CrudActionGroup aria-label="Acciones del proveedor">
+                          <CrudActionIconButton icon="mdi:pencil-outline" title="Editar proveedor" onClick={() => abrirEditar(p)} />
+                          <CrudActionIconButton
+                            icon="mdi:delete-outline"
+                            title="Eliminar proveedor"
+                            danger
+                            disabled={deletingId === p.id}
+                            onClick={() => handleDeleteProveedor(p)}
+                          />
+                        </CrudActionGroup>
                         <Link
                           to={`/administracion/proveedores/${p.id}`}
-                          className="btn btn-primary btn-sm no-underline"
+                          className="btn btn-primary btn-sm inline-flex items-center gap-1.5 no-underline"
                         >
                           <Icon icon="mdi:receipt-text-outline" className="size-4" aria-hidden />
                           Expediente
                         </Link>
-                        <button
-                          type="button"
-                          className="btn btn-outline-danger btn-sm"
-                          disabled={deletingId === p.id}
-                          onClick={() => handleDeleteProveedor(p)}
-                        >
-                          <Icon icon="mdi:delete-outline" className="size-4" aria-hidden />
-                          {deletingId === p.id ? '…' : 'Eliminar'}
-                        </button>
                       </div>
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
-          </div>
+            </tbody>
+          </table>
         )}
       </div>
 

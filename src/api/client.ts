@@ -274,6 +274,16 @@ export async function getUsuarios(): Promise<UsuarioRow[]> {
   return data.usuarios ?? [];
 }
 
+/** Usuarios activos con rol «operador» (selector en rentas). */
+export type UsuarioOperadorCatalogoRow = { id: string; nombre: string };
+
+export async function getUsuariosCatalogoOperadores(): Promise<UsuarioOperadorCatalogoRow[]> {
+  const res = await fetchWithAuth(`${API_BASE}/usuarios/catalogo-operadores`);
+  const data = await parseResponse<{ usuarios?: UsuarioOperadorCatalogoRow[]; error?: string }>(res);
+  if (!res.ok) throw new Error((data as { error?: string }).error || 'Error al cargar operadores');
+  return data.usuarios ?? [];
+}
+
 export async function createUsuario(p: { email: string; password: string; nombre: string; rol: string }): Promise<UsuarioRow> {
   const res = await fetchWithAuth(`${API_BASE}/usuarios`, {
     method: 'POST',
@@ -561,6 +571,37 @@ export async function getReporteProveedoresPorUnidadApi(): Promise<ReportePorUni
   const data = await parseResponse<{ unidades?: ReportePorUnidad[]; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al cargar reporte');
   return data.unidades ?? [];
+}
+
+export type FinanzasGastoMovimientoTipo = 'mantenimiento' | 'factura_proveedor' | 'pago_proveedor';
+
+export type FinanzasGastoMovimiento = {
+  tipo: FinanzasGastoMovimientoTipo;
+  id: string;
+  fecha: string;
+  concepto: string;
+  monto: number;
+  proveedorNombre: string | null;
+  unidadPlacas: string | null;
+  proveedorId: string | null;
+  facturaId: string | null;
+};
+
+export type FinanzasGastosResumen = {
+  totales: {
+    mantenimiento: number;
+    proveedoresFacturado: number;
+    proveedoresPagado: number;
+    proveedoresSaldo: number;
+  };
+  movimientos: FinanzasGastoMovimiento[];
+};
+
+export async function getFinanzasGastosResumenApi(limit = 250): Promise<FinanzasGastosResumen> {
+  const res = await fetchWithAuth(`${API_BASE}/finanzas/gastos?limit=${limit}`, { cache: 'no-store' });
+  const data = await parseResponse<FinanzasGastosResumen & { error?: string }>(res);
+  if (!res.ok) throw new Error((data as { error?: string }).error || 'Error al cargar gastos');
+  return data as FinanzasGastosResumen;
 }
 
 /* ─── Unidades ─── */
@@ -895,6 +936,12 @@ export type RentaRow = {
   precioBase?: number;
   extras?: number;
   operadorAsignado?: string;
+  /** En listado GET /rentas: suma de movimientos en `pagos`. */
+  totalPagado?: number;
+  /** En listado GET /rentas: cantidad de pagos registrados. */
+  pagosCount?: number;
+  /** En listado GET /rentas: fecha del último pago (YYYY-MM-DD). */
+  ultimaFechaPago?: string;
   refrigerado?: RentaRefrigerado | null;
   maquinaria?: RentaMaquinaria | null;
   pagos?: PagoRow[];
@@ -958,7 +1005,7 @@ export async function getRentasProximosVencimientos(dias = 14): Promise<Vencimie
 }
 
 export async function getRentas(): Promise<RentaRow[]> {
-  const res = await fetchWithAuth(`${API_BASE}/rentas`);
+  const res = await fetchWithAuth(`${API_BASE}/rentas`, { cache: 'no-store' });
   const data = await parseResponse<{ rentas?: RentaRow[]; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al cargar rentas');
   return data.rentas ?? [];
@@ -1018,14 +1065,14 @@ export type ClienteDetalle = ClienteListRow & {
 };
 
 export async function getClientes(): Promise<ClienteListRow[]> {
-  const res = await fetchWithAuth(`${API_BASE}/clientes`);
+  const res = await fetchWithAuth(`${API_BASE}/clientes`, { cache: 'no-store' });
   const data = await parseResponse<{ clientes?: ClienteListRow[]; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al cargar clientes');
   return data.clientes ?? [];
 }
 
 export async function getCliente(id: string): Promise<ClienteDetalle> {
-  const res = await fetchWithAuth(`${API_BASE}/clientes/${id}`);
+  const res = await fetchWithAuth(`${API_BASE}/clientes/${id}`, { cache: 'no-store' });
   const data = await parseResponse<{ cliente?: ClienteDetalle; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al cargar cliente');
   return data.cliente!;

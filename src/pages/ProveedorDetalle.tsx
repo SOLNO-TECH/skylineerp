@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Icon } from '@iconify/react';
 import {
   getProveedor,
   updateProveedorApi,
@@ -13,6 +12,19 @@ import {
   type ProveedorFacturaRow,
   type UnidadRow,
 } from '../api/client';
+import {
+  CRUD_CELDA_SEC_LEFT,
+  CRUD_TABLE,
+  CRUD_TABLE_OUTER,
+  CRUD_TBODY,
+  CRUD_THEAD_TR,
+  CrudActionGroup,
+  CrudActionIconAnchor,
+  CrudActionIconButton,
+  CrudActionIconLink,
+  CrudTableTh,
+  crudTableRowClass,
+} from '../components/crud/crudCorporativo';
 import { useNotification } from '../context/NotificationContext';
 import { etiquetaUnidadLista } from '../lib/unidadDisplay';
 import { descargarFacturaProveedorPdf } from '../lib/facturaProveedorPdf';
@@ -304,13 +316,9 @@ export function ProveedorDetalle() {
   return (
     <div>
       <div className="mb-6">
-        <Link
-          to="/administracion/proveedores"
-          className="btn btn-outline-secondary btn-sm no-underline"
-        >
-          <Icon icon="mdi:arrow-left" className="size-4" aria-hidden />
-          Proveedores
-        </Link>
+        <CrudActionGroup aria-label="Navegación">
+          <CrudActionIconLink to="/administracion/proveedores" icon="mdi:arrow-left" title="Volver a proveedores" />
+        </CrudActionGroup>
         <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-xl font-semibold text-gray-900">{prov.nombreRazonSocial}</h2>
@@ -362,15 +370,15 @@ export function ProveedorDetalle() {
           <span className="rounded-full bg-white px-2 py-1 ring-1 ring-skyline-border">
             Pendientes: {prov.resumenFacturas.pendientes}
           </span>
-          <button
-            type="button"
-            className="btn btn-outline-danger btn-sm ml-auto"
-            disabled={deletingProv}
-            onClick={() => void handleEliminarProveedor()}
-          >
-            <Icon icon="mdi:delete-outline" className="size-4" aria-hidden />
-            {deletingProv ? 'Eliminando…' : 'Eliminar proveedor'}
-          </button>
+          <CrudActionGroup aria-label="Proveedor" className="ml-auto">
+            <CrudActionIconButton
+              icon="mdi:delete-outline"
+              title={deletingProv ? 'Eliminando…' : 'Eliminar proveedor'}
+              danger
+              disabled={deletingProv}
+              onClick={() => void handleEliminarProveedor()}
+            />
+          </CrudActionGroup>
         </div>
       </div>
 
@@ -531,21 +539,31 @@ export function ProveedorDetalle() {
             este proveedor en el desplegable para que el costo aparezca aquí y en el listado de proveedores.
           </p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-skyline-border bg-white">
-            <table className="w-full text-sm">
+          <div className={CRUD_TABLE_OUTER}>
+            <table className={CRUD_TABLE}>
               <thead>
-                <tr className="border-b border-skyline-border bg-skyline-bg text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
-                  <th className="px-3 py-2">Unidad</th>
-                  <th className="px-3 py-2">Tipo</th>
-                  <th className="px-3 py-2">Estado</th>
-                  <th className="px-3 py-2">Fechas</th>
-                  <th className="px-3 py-2 text-right">Costo</th>
+                <tr className={CRUD_THEAD_TR}>
+                  <CrudTableTh className="min-w-[9rem] px-2 py-3 text-left align-middle" icon="mdi:truck-outline" align="start">
+                    Unidad
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3 text-left align-middle" icon="mdi:wrench-outline" align="start">
+                    Tipo
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3 text-left align-middle" icon="mdi:bookmark-check-outline" align="start">
+                    Estado
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[7rem] px-2 py-3 text-left align-middle" icon="mdi:calendar-range" align="start">
+                    Fechas
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3 text-right align-middle" icon="mdi:cash-multiple" align="end">
+                    Costo
+                  </CrudTableTh>
                 </tr>
               </thead>
-              <tbody>
-                {(prov.mantenimientos ?? []).map((row) => (
-                  <tr key={row.id} className="border-b border-skyline-border/80 last:border-0">
-                    <td className="px-3 py-2 font-medium text-gray-900">
+              <tbody className={CRUD_TBODY}>
+                {(prov.mantenimientos ?? []).map((row, rowIdx) => (
+                  <tr key={row.id} className={crudTableRowClass(rowIdx)}>
+                    <td className={`px-3 py-2.5 align-middle font-semibold text-slate-900 ${CRUD_CELDA_SEC_LEFT}`}>
                       <span className="block">
                         {etiquetaUnidadLista({
                           numeroEconomico: row.numeroEconomico ?? '',
@@ -555,15 +573,15 @@ export function ProveedorDetalle() {
                         })}
                       </span>
                     </td>
-                    <td className="px-3 py-2 capitalize text-gray-700">{row.tipo}</td>
-                    <td className="px-3 py-2 text-gray-700">
+                    <td className={`px-3 py-2.5 align-middle capitalize ${CRUD_CELDA_SEC_LEFT} text-slate-700`}>{row.tipo}</td>
+                    <td className={`px-3 py-2.5 align-middle ${CRUD_CELDA_SEC_LEFT} text-slate-700`}>
                       {ESTADO_MANT_LABEL[row.estado] ?? row.estado}
                     </td>
-                    <td className="px-3 py-2 text-gray-600">
+                    <td className={`px-3 py-2.5 align-middle ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>
                       {fmtFechaCorta(row.fechaInicio)}
                       {row.fechaFin ? ` → ${fmtFechaCorta(row.fechaFin)}` : ''}
                     </td>
-                    <td className="px-3 py-2 text-right font-medium tabular-nums text-gray-900">
+                    <td className={`px-3 py-2.5 text-right align-middle font-semibold tabular-nums text-slate-900 ${CRUD_CELDA_SEC_LEFT}`}>
                       {fmtMoney(row.costo)}
                     </td>
                   </tr>
@@ -601,36 +619,33 @@ export function ProveedorDetalle() {
                     </p>
                     {f.concepto && <p className="mt-1 text-sm text-gray-700">{f.concepto}</p>}
                     {f.archivoRuta && (
-                      <a
-                        href={`/uploads/${f.archivoRuta}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn btn-outline btn-sm mt-2 no-underline"
-                      >
-                        <Icon icon="mdi:file-pdf-box" className="size-4" aria-hidden />
-                        {f.archivoNombreOriginal || 'Ver adjunto'}
-                      </a>
+                      <div className="mt-2">
+                        <CrudActionGroup aria-label="Adjunto de factura">
+                          <CrudActionIconAnchor
+                            href={`/uploads/${f.archivoRuta}`}
+                            icon="mdi:file-eye-outline"
+                            title={f.archivoNombreOriginal || 'Ver adjunto'}
+                          />
+                        </CrudActionGroup>
+                      </div>
                     )}
                   </div>
                   <div className="text-right text-sm">
-                    <div className="mb-3 flex flex-wrap justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => descargarPdfFactura(f)}
-                        className="btn btn-outline btn-sm"
-                      >
-                        <Icon icon="mdi:file-pdf-box" className="size-4 text-red-600" aria-hidden />
-                        PDF factura
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-outline-danger btn-sm"
-                        disabled={deletingFacturaId === f.id}
-                        onClick={() => handleEliminarFactura(f)}
-                      >
-                        <Icon icon="mdi:file-remove-outline" className="size-4" aria-hidden />
-                        {deletingFacturaId === f.id ? '…' : 'Eliminar factura'}
-                      </button>
+                    <div className="mb-3 flex flex-wrap justify-end">
+                      <CrudActionGroup aria-label="Acciones de factura">
+                        <CrudActionIconButton
+                          icon="mdi:file-pdf-box"
+                          title="Descargar PDF de factura"
+                          onClick={() => descargarPdfFactura(f)}
+                        />
+                        <CrudActionIconButton
+                          icon="mdi:file-remove-outline"
+                          title="Eliminar factura"
+                          danger
+                          disabled={deletingFacturaId === f.id}
+                          onClick={() => handleEliminarFactura(f)}
+                        />
+                      </CrudActionGroup>
                     </div>
                     <p>
                       Total: <span className="font-semibold tabular-nums">{fmtMoney(f.montoTotal)}</span>

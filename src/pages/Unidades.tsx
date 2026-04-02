@@ -1,5 +1,25 @@
 import { Icon } from '@iconify/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  CRUD_CELDA_PRIMARIO,
+  CRUD_CELDA_SEC,
+  CRUD_CELDA_TAB,
+  CRUD_ERROR_BANNER,
+  CRUD_HEADER_ROW,
+  CRUD_PAGE_SUBTITLE,
+  CRUD_PAGE_TITLE,
+  CRUD_SPINNER,
+  CRUD_SPINNER_WRAP,
+  CRUD_TABLE,
+  CRUD_TABLE_OUTER,
+  CRUD_TBODY,
+  CRUD_THEAD_TR,
+  CRUD_TOOLBAR,
+  CrudActionGroup,
+  CrudActionIconButton,
+  CrudTableTh,
+  crudTableRowClass,
+} from '../components/crud/crudCorporativo';
 import { useNotification } from '../context/NotificationContext';
 import {
   getUnidades,
@@ -103,9 +123,46 @@ function textoSerieCrud(serie: string | undefined): string {
   return esSeriePlaceholder(serie) ? 'Pendiente de capturar' : String(serie ?? '').trim();
 }
 
-function statusPill(e: Estatus) {
-  if (e === 'Disponible') return 'badge-disponible';
-  return 'badge-renta';
+/** Hay renta reservada o activa (el API rellena `clienteEnRenta` con esa subconsulta). */
+function rentaVinculadaActiva(u: UnidadRow): boolean {
+  return Boolean((u.clienteEnRenta ?? '').trim());
+}
+
+/** Estatus para listado/filtros: si hay renta vinculada se muestra En Renta aunque el campo en BD siga en Disponible. */
+function estatusOperativoListado(u: UnidadRow): Estatus {
+  if (u.estatus === 'En Renta') return 'En Renta';
+  if (rentaVinculadaActiva(u)) return 'En Renta';
+  return 'Disponible';
+}
+
+/** Chips discretos estilo corporativo (sin mayúsculas agresivas). */
+function pillSiNo(active: boolean) {
+  return active
+    ? 'inline-flex items-center justify-center rounded border border-emerald-200/70 bg-emerald-50/90 px-2 py-0.5 text-[11px] font-medium text-emerald-900'
+    : 'inline-flex items-center justify-center rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600';
+}
+
+function pillRotulada(v: boolean | null | undefined) {
+  if (v === true) {
+    return 'inline-flex items-center justify-center rounded border border-emerald-200/70 bg-emerald-50/90 px-2 py-0.5 text-[11px] font-medium text-emerald-900';
+  }
+  if (v === false) {
+    return 'inline-flex items-center justify-center rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600';
+  }
+  return 'inline-flex items-center justify-center rounded border border-amber-200/80 bg-amber-50/80 px-2 py-0.5 text-[11px] font-medium text-amber-900';
+}
+
+function estatusCorporativoClass(e: Estatus) {
+  if (e === 'Disponible') {
+    return pillSiNo(true);
+  }
+  return 'inline-flex items-center justify-center rounded border border-[#2D58A7]/25 bg-[#2D58A7]/[0.08] px-2 py-0.5 text-[11px] font-medium text-[#24478a]';
+}
+
+function pillRotuladaText(v: boolean | null | undefined) {
+  if (v === true) return 'Sí';
+  if (v === false) return 'No';
+  return 'Sin definir';
 }
 
 export function Unidades() {
@@ -124,6 +181,31 @@ export function Unidades() {
   const [filtroFmAnterior, setFiltroFmAnterior] = useState<'todos' | 'con_foto' | 'sin_foto'>('todos');
   const [filtroFmVigente, setFiltroFmVigente] = useState<'todos' | 'con_foto' | 'sin_foto'>('todos');
   const [filtroTarjetaFoto, setFiltroTarjetaFoto] = useState<'todos' | 'con_foto' | 'sin_foto'>('todos');
+  const [filtrosExtraOpen, setFiltrosExtraOpen] = useState(false);
+
+  const filtrosExtraActivos = useMemo(() => {
+    return (
+      filtroSubestatus !== 'todos' ||
+      filtroUbicacion !== 'todos' ||
+      filtroCliente !== 'todos' ||
+      filtroGps !== 'todos' ||
+      filtroRotulada !== 'todos' ||
+      filtroGestor !== 'todos' ||
+      filtroFmAnterior !== 'todos' ||
+      filtroFmVigente !== 'todos' ||
+      filtroTarjetaFoto !== 'todos'
+    );
+  }, [
+    filtroSubestatus,
+    filtroUbicacion,
+    filtroCliente,
+    filtroGps,
+    filtroRotulada,
+    filtroGestor,
+    filtroFmAnterior,
+    filtroFmVigente,
+    filtroTarjetaFoto,
+  ]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -175,14 +257,17 @@ export function Unidades() {
 
   const counts = useMemo(() => {
     const c: Record<Estatus, number> = { Disponible: 0, 'En Renta': 0 };
-    for (const u of unidades) c[u.estatus] += 1;
+    for (const u of unidades) {
+      c[estatusOperativoListado(u)] += 1;
+    }
     return c;
   }, [unidades]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return unidades.filter((u) => {
-      const byStatus = filtro === 'Todos' ? true : u.estatus === filtro;
+      const op = estatusOperativoListado(u);
+      const byStatus = filtro === 'Todos' ? true : op === filtro;
       const bySubestatus =
         filtroSubestatus === 'todos' ? true : (u.subestatusDisponible ?? 'disponible') === filtroSubestatus;
       const byUbicacion =
@@ -273,7 +358,7 @@ export function Unidades() {
   const clientesEnRenta = useMemo(() => {
     const set = new Set<string>();
     for (const u of unidades) {
-      if (u.estatus !== 'En Renta') continue;
+      if (estatusOperativoListado(u) !== 'En Renta') continue;
       const c = (u.clienteEnRenta ?? '').trim();
       if (c) set.add(c);
     }
@@ -573,10 +658,10 @@ export function Unidades() {
 
   return (
     <div>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+      <header className={CRUD_HEADER_ROW}>
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Control de Unidades</h1>
-          <p className="mt-1 text-sm font-medium text-gray-500">
+          <h1 className={CRUD_PAGE_TITLE}>Control de Unidades</h1>
+          <p className={CRUD_PAGE_SUBTITLE}>
             Administra inventario, expedientes, documentos y estatus en tiempo real.
           </p>
         </div>
@@ -586,32 +671,26 @@ export function Unidades() {
         </button>
       </header>
 
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-500/10 px-4 py-3 text-sm font-medium text-red-600">
-          {error}
-        </div>
-      )}
+      {error && <div className={CRUD_ERROR_BANNER}>{error}</div>}
 
-      {/* Toolbar */}
-      <div className="mb-5 rounded-lg border border-skyline-border bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex-1">
-            <label className="text-sm font-medium text-gray-700">
-              Buscar
-              <div className="mt-1 flex items-center gap-2">
-                <Icon icon="mdi:magnify" className="size-4 text-skyline-muted" aria-hidden />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Núm. económico, placas, marca, modelo…"
-                  className="w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                />
-              </div>
-            </label>
-          </div>
+      {/* Toolbar — compacto; filtros detallados en panel plegable */}
+      <div className={CRUD_TOOLBAR}>
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between lg:gap-3">
+          <label className="min-w-0 flex-1 lg:max-w-md">
+            <span className="text-xs font-medium text-gray-600">Buscar</span>
+            <div className="mt-0.5 flex items-center gap-1.5 rounded-md border border-skyline-border bg-gray-50/80 px-2 transition-colors focus-within:border-skyline-blue focus-within:ring-1 focus-within:ring-skyline-blue">
+              <Icon icon="mdi:magnify" className="size-4 shrink-0 text-skyline-muted" aria-hidden />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Núm. económico, placas, marca, modelo…"
+                className="min-h-[2rem] w-full border-0 bg-transparent py-1 text-sm text-gray-900 outline-none placeholder:text-gray-400"
+              />
+            </div>
+          </label>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-gray-500">Estatus:</span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-gray-500">Estatus</span>
             {(['Todos', 'Disponible', 'En Renta'] as const).map((opt) => {
               const isActive = filtro === opt;
               const count =
@@ -621,257 +700,352 @@ export function Unidades() {
                   key={opt}
                   type="button"
                   onClick={() => setFiltro(opt)}
-                  className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                  className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${
                     isActive
-                      ? 'border-skyline-blue bg-skyline-blue text-white'
-                      : 'border-skyline-border bg-white text-gray-500 hover:border-skyline-blue hover:text-skyline-blue'
+                      ? 'border-skyline-blue bg-skyline-blue text-white shadow-sm'
+                      : 'border-skyline-border bg-white text-gray-600 hover:border-skyline-blue hover:text-skyline-blue'
                   }`}
                 >
-                  {opt} <span className={isActive ? 'text-white/90' : 'text-gray-400'}>({count})</span>
+                  {opt}{' '}
+                  <span className={isActive ? 'font-bold text-white/95' : 'font-medium text-gray-400'}>({count})</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm text-gray-500">
-            Mostrando <span className="font-semibold text-gray-900">{filtered.length}</span> de{' '}
-            <span className="font-semibold text-gray-900">{unidades.length}</span> unidades
-          </span>
-          <span className="text-sm text-gray-500">
-            Haz clic en una fila o en <span className="font-semibold">Expediente</span> para ver documentos y registrar novedades.
-          </span>
-        </div>
-        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <label className="text-sm font-medium text-gray-700">
-            Disponible: subestatus
-            <select
-              value={filtroSubestatus}
-              onChange={(e) => setFiltroSubestatus(e.target.value as SubestatusDisponible | 'todos')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todos</option>
-              {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
-                <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-gray-700">
-            Disponible: ubicación
-            <select
-              value={filtroUbicacion}
-              onChange={(e) => setFiltroUbicacion(e.target.value as UbicacionDisponible | 'todos')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todas</option>
-              {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
-                <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-gray-700">
-            En renta: cliente
-            <select
-              value={filtroCliente}
-              onChange={(e) => setFiltroCliente(e.target.value)}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todos</option>
-              {clientesEnRenta.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <label className="text-sm font-medium text-gray-700">
-            GPS
-            <select
-              value={filtroGps}
-              onChange={(e) => setFiltroGps(e.target.value as 'todos' | 'con_gps' | 'sin_gps')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todos</option>
-              <option value="con_gps">Con GPS</option>
-              <option value="sin_gps">Sin GPS</option>
-            </select>
-          </label>
-          <label className="text-sm font-medium text-gray-700">
-            Rotulada
-            <select
-              value={filtroRotulada}
-              onChange={(e) => setFiltroRotulada(e.target.value as 'todos' | 'si' | 'no' | 'sin_definir')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todas</option>
-              <option value="si">Sí</option>
-              <option value="no">No</option>
-              <option value="sin_definir">Sin definir</option>
-            </select>
-          </label>
-          <label className="text-sm font-medium text-gray-700">
-            Gestor FM
-            <select
-              value={filtroGestor}
-              onChange={(e) => setFiltroGestor(e.target.value as 'todos' | 'con_gestor' | 'sin_gestor')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todos</option>
-              <option value="con_gestor">Con gestor</option>
-              <option value="sin_gestor">Sin gestor</option>
-            </select>
-          </label>
-        </div>
-        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <label className="text-sm font-medium text-gray-700">
-            FM anterior
-            <select
-              value={filtroFmAnterior}
-              onChange={(e) => setFiltroFmAnterior(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todos</option>
-              <option value="con_foto">Con foto</option>
-              <option value="sin_foto">Sin foto</option>
-            </select>
-          </label>
-          <label className="text-sm font-medium text-gray-700">
-            FM vigente
-            <select
-              value={filtroFmVigente}
-              onChange={(e) => setFiltroFmVigente(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todos</option>
-              <option value="con_foto">Con foto</option>
-              <option value="sin_foto">Sin foto</option>
-            </select>
-          </label>
-          <label className="text-sm font-medium text-gray-700">
-            Tarjeta circulación
-            <select
-              value={filtroTarjetaFoto}
-              onChange={(e) => setFiltroTarjetaFoto(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
-              className="mt-1 w-full rounded-md border border-skyline-border bg-white px-3 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-            >
-              <option value="todos">Todos</option>
-              <option value="con_foto">Con foto</option>
-              <option value="sin_foto">Sin foto</option>
-            </select>
-          </label>
-        </div>
+        <p className="mt-2 text-xs leading-relaxed text-gray-600">
+          <span className="font-semibold text-gray-900">
+            {filtered.length} de {unidades.length}
+          </span>{' '}
+          unidades · Clic en una fila o en <span className="font-semibold text-gray-800">Expediente</span> para ver
+          documentos.
+        </p>
+
+        <button
+          type="button"
+          onClick={() => setFiltrosExtraOpen((v) => !v)}
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-skyline-border bg-slate-50/80 px-2 py-1.5 text-xs font-semibold text-skyline-blue transition-colors hover:border-skyline-blue hover:bg-skyline-blue/5 sm:w-auto sm:justify-start"
+        >
+          <Icon icon={filtrosExtraOpen ? 'mdi:chevron-up' : 'mdi:chevron-down'} className="size-4" aria-hidden />
+          {filtrosExtraOpen ? 'Ocultar filtros adicionales' : 'Más filtros'}
+          {filtrosExtraActivos ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+              Activos
+            </span>
+          ) : null}
+        </button>
+
+        {filtrosExtraOpen ? (
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+            <label className="text-xs font-medium text-gray-600">
+              Disp.: subestatus
+              <select
+                value={filtroSubestatus}
+                onChange={(e) => setFiltroSubestatus(e.target.value as SubestatusDisponible | 'todos')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todos</option>
+                {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
+                  <option key={k} value={k}>
+                    {SUBESTATUS_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              Disp.: ubicación
+              <select
+                value={filtroUbicacion}
+                onChange={(e) => setFiltroUbicacion(e.target.value as UbicacionDisponible | 'todos')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todas</option>
+                {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
+                  <option key={k} value={k}>
+                    {UBICACION_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              En renta: cliente
+              <select
+                value={filtroCliente}
+                onChange={(e) => setFiltroCliente(e.target.value)}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todos</option>
+                {clientesEnRenta.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              GPS
+              <select
+                value={filtroGps}
+                onChange={(e) => setFiltroGps(e.target.value as 'todos' | 'con_gps' | 'sin_gps')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todos</option>
+                <option value="con_gps">Con GPS</option>
+                <option value="sin_gps">Sin GPS</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              Rotulada
+              <select
+                value={filtroRotulada}
+                onChange={(e) => setFiltroRotulada(e.target.value as 'todos' | 'si' | 'no' | 'sin_definir')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todas</option>
+                <option value="si">Sí</option>
+                <option value="no">No</option>
+                <option value="sin_definir">Sin definir</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              Gestor FM
+              <select
+                value={filtroGestor}
+                onChange={(e) => setFiltroGestor(e.target.value as 'todos' | 'con_gestor' | 'sin_gestor')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todos</option>
+                <option value="con_gestor">Con gestor</option>
+                <option value="sin_gestor">Sin gestor</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              FM anterior
+              <select
+                value={filtroFmAnterior}
+                onChange={(e) => setFiltroFmAnterior(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todos</option>
+                <option value="con_foto">Con foto</option>
+                <option value="sin_foto">Sin foto</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              FM vigente
+              <select
+                value={filtroFmVigente}
+                onChange={(e) => setFiltroFmVigente(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todos</option>
+                <option value="con_foto">Con foto</option>
+                <option value="sin_foto">Sin foto</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              Tarjeta circulación
+              <select
+                value={filtroTarjetaFoto}
+                onChange={(e) => setFiltroTarjetaFoto(e.target.value as 'todos' | 'con_foto' | 'sin_foto')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todos</option>
+                <option value="con_foto">Con foto</option>
+                <option value="sin_foto">Sin foto</option>
+              </select>
+            </label>
+          </div>
+        ) : null}
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-lg border border-skyline-border bg-white shadow-sm">
+      <div className={CRUD_TABLE_OUTER}>
         {loading ? (
-          <div className="flex justify-center py-12">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-skyline-border border-t-skyline-blue" />
+          <div className={CRUD_SPINNER_WRAP}>
+            <div className={CRUD_SPINNER} />
           </div>
         ) : (
-          <table className="min-w-[1220px] w-full text-sm">
+          <table className={`${CRUD_TABLE} min-w-[1120px]`}>
             <thead>
-              <tr className="border-b border-skyline-border bg-skyline-bg">
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Foto</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">No. econ.</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Placas</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Marca</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Modelo</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Serie caja</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Estatus</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">GPS / Rotulada</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Ubicación / Cliente</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-700">Acciones</th>
+              <tr className={CRUD_THEAD_TR}>
+                <CrudTableTh className="w-[4.5rem] px-2 py-3.5 align-middle" icon="mdi:image-outline">
+                  Foto
+                </CrudTableTh>
+                <CrudTableTh className="w-[5.75rem] px-2 py-3.5 align-middle" icon="mdi:tag-outline">
+                  No. econ.
+                </CrudTableTh>
+                <CrudTableTh className="w-[6.25rem] px-2 py-3.5 align-middle" icon="mdi:card-outline">
+                  Placas
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 align-middle" icon="mdi:domain">
+                  Marca
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 align-middle" icon="mdi:car-outline">
+                  Modelo
+                </CrudTableTh>
+                <CrudTableTh
+                  className="min-w-[7.5rem] max-w-[11rem] px-2 py-3.5 align-middle"
+                  icon="mdi:barcode-scan"
+                >
+                  Serie caja
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[7.5rem] px-2 py-3.5 align-middle" icon="mdi:bookmark-check-outline">
+                  Estatus
+                </CrudTableTh>
+                <CrudTableTh
+                  className="min-w-[11rem] px-2 py-3.5 align-middle"
+                  icon="mdi:crosshairs-gps"
+                  title="GPS, rotulado y gestor físico-mecánica"
+                >
+                  GPS · Rotul. · Gestor
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[7.5rem] px-2 py-3.5 align-middle" icon="mdi:map-marker-outline">
+                  Ubicación
+                </CrudTableTh>
+                <CrudTableTh className="w-[1%] whitespace-nowrap px-2 py-3.5 align-middle" icon="mdi:cog-outline">
+                  Acciones
+                </CrudTableTh>
               </tr>
             </thead>
-            <tbody>
-              {filtered.map((u) => (
+            <tbody className={CRUD_TBODY}>
+              {filtered.map((u, rowIdx) => {
+                const estatusTabla = estatusOperativoListado(u);
+                return (
                 <tr
                   key={u.id}
-                  className="cursor-pointer border-b border-skyline-border last:border-0 hover:bg-skyline-blue/5 transition-colors"
+                  className={crudTableRowClass(rowIdx, { clickable: true })}
                   onClick={() => openDrawer(u.id, 'expediente')}
                 >
-                  <td className="px-4 py-3">
-                    {u.imagenes?.[0] ? (
-                      <img
-                        src={getImagenUrl(u.imagenes[0].ruta)}
-                        alt={`Unidad ${u.placas}`}
-                        className="size-12 rounded-md object-cover ring-1 ring-skyline-border"
-                      />
-                    ) : (
-                      <div className="flex size-12 items-center justify-center rounded-md bg-skyline-bg text-skyline-muted ring-1 ring-skyline-border">
-                        <Icon icon="mdi:image-off-outline" className="size-5" aria-hidden />
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <div className="flex justify-center">
+                      {u.imagenes?.[0] ? (
+                        <img
+                          src={getImagenUrl(u.imagenes[0].ruta)}
+                          alt={`Unidad ${u.placas}`}
+                          className="size-11 rounded object-cover ring-1 ring-slate-200/90"
+                        />
+                      ) : (
+                        <div className="flex size-11 items-center justify-center rounded bg-slate-100 text-slate-400 ring-1 ring-slate-200/80">
+                          <Icon icon="mdi:image-off-outline" className="size-[18px]" aria-hidden />
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span className={`block w-full ${CRUD_CELDA_PRIMARIO}`}>
+                      {(u.numeroEconomico ?? '').trim() || '—'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span className={`block w-full ${CRUD_CELDA_SEC}`}>{u.placas}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span className={`mx-auto line-clamp-2 max-w-[10rem] ${CRUD_CELDA_SEC}`} title={u.marca}>
+                      {u.marca}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span className={`mx-auto line-clamp-2 max-w-[10rem] ${CRUD_CELDA_SEC}`} title={u.modelo}>
+                      {u.modelo}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span
+                      className={`mx-auto block max-w-[11rem] ${CRUD_CELDA_TAB}`}
+                      title={textoSerieCrud(u.numeroSerieCaja)}
+                    >
+                      {textoSerieCrud(u.numeroSerieCaja)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <div className="flex flex-col items-center gap-1.5">
+                      <span className={estatusCorporativoClass(estatusTabla)}>{estatusTabla}</span>
+                      {estatusTabla === 'Disponible' && (u.subestatusDisponible ?? 'disponible') !== 'disponible' ? (
+                        <span className="inline-flex max-w-[11rem] justify-center rounded border border-slate-200/90 bg-white px-2 py-0.5 text-center text-[11px] font-medium leading-tight text-slate-600">
+                          {SUBESTATUS_LABEL[u.subestatusDisponible ?? 'disponible']}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <div className="mx-auto flex max-w-[15rem] flex-col items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5">
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">GPS</span>
+                          <span className={pillSiNo(!!u.tieneGps)}>{u.tieneGps ? 'Sí' : 'No'}</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Rotul.</span>
+                          <span className={pillRotulada(u.unidadRotulada)}>{pillRotuladaText(u.unidadRotulada)}</span>
+                        </span>
                       </div>
+                      {(u.gestorFisicoMecanica ?? '').trim() ? (
+                        <div
+                          className="w-full border-t border-slate-200/80 pt-2"
+                          title={(u.gestorFisicoMecanica ?? '').trim()}
+                        >
+                          <p className="mb-1 text-center text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                            Gestor
+                          </p>
+                          <div className="flex flex-col items-center gap-1">
+                            <Icon icon="mdi:account-tie-outline" className="size-3.5 shrink-0 text-slate-400" aria-hidden />
+                            <span className="break-words text-center text-[11px] font-medium leading-snug text-slate-600">
+                              {(u.gestorFisicoMecanica ?? '').trim()}
+                            </span>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    {estatusTabla === 'Disponible' ? (
+                      <div className="flex justify-center">
+                        <span className="inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-200/90 bg-white px-2 py-1 text-[13px] font-medium text-slate-700 shadow-sm shadow-slate-900/[0.03]">
+                          <Icon icon="mdi:map-marker-outline" className="size-3.5 shrink-0 text-slate-400" aria-hidden />
+                          {UBICACION_LABEL[u.ubicacionDisponible ?? 'lote']}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="block text-center text-[13px] font-medium leading-normal text-slate-300">
+                        —
+                      </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 font-semibold tabular-nums text-gray-900">{(u.numeroEconomico ?? '').trim() || '—'}</td>
-                  <td className="px-4 py-3 font-semibold text-gray-900">{u.placas}</td>
-                  <td className="px-4 py-3 text-gray-700">{u.marca}</td>
-                  <td className="px-4 py-3 text-gray-700">{u.modelo}</td>
-                  <td className="px-4 py-3 text-gray-700">{textoSerieCrud(u.numeroSerieCaja)}</td>
-                  <td className="px-4 py-3">
-                    <span className={`badge ${statusPill(u.estatus)}`}>{u.estatus}</span>
-                    {u.estatus === 'Disponible' && (u.subestatusDisponible ?? 'disponible') !== 'disponible' ? (
-                      <p className="mt-1 text-xs text-gray-500">{SUBESTATUS_LABEL[u.subestatusDisponible ?? 'disponible']}</p>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3 text-xs">
-                    <p className="text-gray-700">GPS: <span className="font-semibold">{u.tieneGps ? 'Sí' : 'No'}</span></p>
-                    <p className="text-gray-700">Rotulada: <span className="font-semibold">{textoRotulada(u.unidadRotulada)}</span></p>
-                    {(u.gestorFisicoMecanica ?? '').trim() ? (
-                      <p className="truncate text-gray-500">Gestor: {(u.gestorFisicoMecanica ?? '').trim()}</p>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-gray-600">
-                    {u.estatus === 'Disponible'
-                      ? UBICACION_LABEL[u.ubicacionDisponible ?? 'lote']
-                      : (u.clienteEnRenta || 'Sin cliente')}
-                  </td>
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex flex-wrap gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => openDrawer(u.id, 'expediente')}
-                        className="btn btn-outline btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
+                  <td className="px-3 py-2.5 text-center align-middle" onClick={(e) => e.stopPropagation()}>
+                    <CrudActionGroup aria-label="Acciones de la unidad">
+                      <CrudActionIconButton
+                        icon="mdi:folder-outline"
                         title="Expediente"
-                      >
-                        <Icon icon="mdi:folder" className="size-4" aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openDrawer(u.id, 'documentos')}
-                        className="btn btn-outline-secondary btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
+                        onClick={() => openDrawer(u.id, 'expediente')}
+                      />
+                      <CrudActionIconButton
+                        icon="mdi:file-document-outline"
                         title="Documentos"
-                      >
-                        <Icon icon="mdi:file-document-outline" className="size-4" aria-hidden />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openDrawer(u.id, 'imagenes')}
-                        className="btn btn-outline-secondary btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
+                        onClick={() => openDrawer(u.id, 'documentos')}
+                      />
+                      <CrudActionIconButton
+                        icon="mdi:image-multiple-outline"
                         title="Imágenes"
-                      >
-                        <Icon icon="mdi:image-multiple" className="size-4" aria-hidden />
-                      </button>
-                      <button
-                        type="button"
+                        onClick={() => openDrawer(u.id, 'imagenes')}
+                      />
+                      <CrudActionIconButton
+                        icon="mdi:pencil-outline"
+                        title="Editar datos"
                         onClick={(e) => {
                           e.stopPropagation();
                           openEditar(u);
                         }}
-                        className="btn btn-outline btn-sm inline-flex !size-8 items-center justify-center !gap-0 !p-0"
-                        title="Editar datos"
-                      >
-                        <Icon icon="mdi:pencil" className="size-4" aria-hidden />
-                      </button>
-                    </div>
+                      />
+                    </CrudActionGroup>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {filtered.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-gray-500">
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-gray-500">
                     {unidades.length === 0
                       ? 'No hay unidades. Haz clic en "Nueva unidad" para agregar la primera.'
                       : 'No hay unidades con esos filtros.'}
@@ -1535,55 +1709,46 @@ export function Unidades() {
                     </div>
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <span className={`badge ${statusPill(selected.estatus)}`}>{selected.estatus}</span>
-                    <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                    <span className={estatusCorporativoClass(estatusOperativoListado(selected))}>
+                      {estatusOperativoListado(selected)}
+                    </span>
+                    <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                       Serie: {textoSerieCrud(selected.numeroSerieCaja)}
                     </span>
-                    <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                    <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                       GPS: {selected.tieneGps ? 'Sí' : 'No'}
                     </span>
                     {selected.tieneGps && (selected.gpsNumero1 || selected.gpsNumero2) ? (
-                      <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                      <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                         GPS Econ.: {[selected.gpsNumero1, selected.gpsNumero2].filter(Boolean).join(' · ')}
                       </span>
                     ) : null}
-                    {selected.estatus === 'Disponible' ? (
+                    {estatusOperativoListado(selected) === 'Disponible' ? (
                       <>
-                        <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                        <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                           {SUBESTATUS_LABEL[selected.subestatusDisponible ?? 'disponible']}
                         </span>
-                        <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                        <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                           {UBICACION_LABEL[selected.ubicacionDisponible ?? 'lote']}
                         </span>
                       </>
                     ) : (
-                      <span className="rounded-md bg-skyline-bg px-2 py-1 text-xs text-gray-600">
+                      <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                         Cliente: {selected.clienteEnRenta || 'Sin cliente'}
                       </span>
                     )}
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openEditar(selected)}
-                    className="btn btn-outline btn-sm inline-flex !size-9 items-center justify-center !gap-0 !p-0"
-                    title="Editar unidad"
-                  >
-                    <Icon icon="mdi:pencil" className="size-4" aria-hidden />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmEliminar(selected.id)}
-                    className="btn btn-outline-danger btn-sm inline-flex !size-9 items-center justify-center !gap-0 !p-0"
+                <CrudActionGroup aria-label="Acciones del panel">
+                  <CrudActionIconButton icon="mdi:pencil-outline" title="Editar unidad" onClick={() => openEditar(selected)} />
+                  <CrudActionIconButton
+                    icon="mdi:delete-outline"
                     title="Eliminar unidad"
-                  >
-                    <Icon icon="mdi:delete-outline" className="size-4" aria-hidden />
-                  </button>
-                  <button type="button" onClick={closeDrawer} className="btn btn-outline-secondary btn-sm">
-                    Cerrar
-                  </button>
-                </div>
+                    danger
+                    onClick={() => setConfirmEliminar(selected.id)}
+                  />
+                  <CrudActionIconButton icon="mdi:close" title="Cerrar panel" onClick={closeDrawer} />
+                </CrudActionGroup>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">

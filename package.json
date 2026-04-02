@@ -23,6 +23,7 @@
     "vite": "^8.0.0"
   },
   "dependencies": {
+    "@iconify-json/mdi": "^1.2.3",
     "@iconify/react": "^6.0.2",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",

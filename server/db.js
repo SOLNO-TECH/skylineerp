@@ -277,6 +277,17 @@ function migrarUnidades() {
     // Marcador claro cuando nunca se capturó serie (no es un “formato” de negocio).
     db.exec("UPDATE unidades SET numero_serie_caja = 'PENDIENTE-' || id WHERE TRIM(COALESCE(numero_serie_caja, '')) = ''");
     db.exec("UPDATE unidades SET numero_serie_caja = 'PENDIENTE-' || id WHERE numero_serie_caja = 'SIN-SERIE-' || id");
+    // Unidades ya dadas de baja (activo=0) pueden seguir bloqueando placas por UNIQUE en SQLite; liberar placas históricas.
+    const bajaMarker = '[baja#';
+    const inactivas = db
+      .prepare('SELECT id, placas FROM unidades WHERE activo = 0 AND instr(placas, ?) = 0')
+      .all(bajaMarker);
+    const updPlacas = db.prepare('UPDATE unidades SET placas = ? WHERE id = ?');
+    for (const row of inactivas) {
+      const base = String(row.placas ?? '').trim();
+      const stamp = Date.now();
+      updPlacas.run(`${base} [baja#${row.id} ts=${stamp}]`, row.id);
+    }
   } catch (e) { console.warn('Migración unidades:', e?.message); }
   try {
     const docCols = db.prepare("PRAGMA table_info(unidad_documentos)").all().map(r => r.name);
@@ -435,12 +446,23 @@ export function getAllRentas() {
     `SELECT r.id, r.unidad_id, r.cliente_id, r.cliente_nombre, r.cliente_telefono, r.cliente_email, r.fecha_inicio, r.fecha_fin, r.estado,
             r.monto, r.deposito, r.observaciones, r.creado_en,
             r.tipo_servicio, r.ubicacion_entrega, r.ubicacion_recoleccion, r.estado_logistico, r.precio_base, r.extras, r.operador_asignado,
-            u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
+            u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad,
+            COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.renta_id = r.id), 0) AS total_pagado,
+            (SELECT COUNT(*) FROM pagos p WHERE p.renta_id = r.id) AS pagos_count,
+            (SELECT MAX(p.fecha) FROM pagos p WHERE p.renta_id = r.id) AS ultima_fecha_pago
      FROM rentas r
      JOIN unidades u ON u.id = r.unidad_id AND u.activo = 1
      ORDER BY r.fecha_inicio DESC`
   ).all();
-  return rows.map(r => mapRentaRow(r));
+  return rows.map((r) => {
+    const base = mapRentaRow(r);
+    return {
+      ...base,
+      totalPagado: Number(r.total_pagado) || 0,
+      pagosCount: Number(r.pagos_count) || 0,
+      ultimaFechaPago: r.ultima_fecha_pago ? String(r.ultima_fecha_pago) : undefined,
+    };
+  });
 }
 
 function mapRentaRow(r) {
@@ -797,13 +819,16 @@ export function getActividadReciente(limit = 15) {
     )
       ? s.categoria
       : 'sistema';
+    const ic = String(s.icon ?? '')
+      .trim()
+      .replace(/\s+/g, '');
     const out = {
       tipo,
       id: `s-${s.id}`,
       accion: s.accion,
       detalle: s.detalle || '',
       fecha: s.fecha,
-      icon: s.icon || 'mdi:information',
+      icon: ic || 'mdi:information',
       usuarioNombre: s.usuario_nombre || undefined,
     };
     if (s.entidad_tipo === 'renta' && s.entidad_id) out.rentaId = String(s.entidad_id);
@@ -1078,6 +1103,15 @@ export function getAllUsuarios() {
   return db.prepare(
     'SELECT id, email, nombre, rol, activo, creado_en FROM usuarios ORDER BY nombre'
   ).all();
+}
+
+/** Catálogo para asignar operador en rentas (usuarios activos con rol operador). */
+export function getUsuariosCatalogoOperadores() {
+  return db
+    .prepare(
+      'SELECT id, nombre FROM usuarios WHERE activo = 1 AND rol = ? ORDER BY nombre COLLATE NOCASE'
+    )
+    .all(ROLES.OPERADOR);
 }
 
 export function getUsuarioByIdAdmin(id) {
@@ -1789,16 +1823,22 @@ export function deleteUnidad(id, usuarioId = null) {
   const nid = Number(id);
   const u = db.prepare('SELECT id, placas FROM unidades WHERE id = ? AND activo = 1').get(nid);
   if (!u) return null;
+  const basePlacas = String(u.placas ?? '').trim();
+  const stamp = Date.now();
+  // La columna placas tiene UNIQUE en SQLite: si solo ponemos activo=0, no se pueden volver a usar las mismas placas.
+  const placasArchivo = `${basePlacas} [baja#${nid} ts=${stamp}]`;
   registrarSistemaActividad({
     categoria: 'unidad',
     accion: 'Unidad eliminada (baja lógica)',
-    detalle: `Placas ${u.placas}`,
+    detalle: `Placas ${basePlacas}`,
     entidadTipo: 'unidad',
     entidadId: String(nid),
     usuarioId,
     icon: 'mdi:delete',
   });
-  db.prepare("UPDATE unidades SET activo = 0, actualizado_en = datetime('now') WHERE id = ?").run(nid);
+  db.prepare(
+    "UPDATE unidades SET placas = ?, activo = 0, actualizado_en = datetime('now') WHERE id = ?"
+  ).run(placasArchivo, nid);
   return true;
 }
 
@@ -2209,7 +2249,9 @@ export function getAllClientes() {
     .prepare(
       `SELECT c.*,
         (SELECT COUNT(*) FROM cliente_documentos d WHERE d.cliente_id = c.id) AS doc_count,
-        (SELECT COUNT(*) FROM rentas r WHERE r.cliente_id = c.id) AS rentas_vinculadas
+        (SELECT COUNT(*) FROM rentas r
+           JOIN unidades u ON u.id = r.unidad_id AND u.activo = 1
+           WHERE r.cliente_id = c.id) AS rentas_vinculadas
        FROM clientes c
        WHERE c.activo = 1
        ORDER BY c.nombre_comercial COLLATE NOCASE, c.razon_social COLLATE NOCASE`
@@ -2228,7 +2270,7 @@ export function getClienteById(id) {
     .prepare(
       `SELECT r.id, r.fecha_inicio, r.fecha_fin, r.estado, u.placas
        FROM rentas r
-       JOIN unidades u ON u.id = r.unidad_id
+       JOIN unidades u ON u.id = r.unidad_id AND u.activo = 1
        WHERE r.cliente_id = ?
        ORDER BY r.fecha_inicio DESC`
     )
@@ -2888,6 +2930,90 @@ export function getReporteCuentasPorPagar() {
     { facturado: 0, pagado: 0, saldo: 0 }
   );
   return { proveedores, facturasPendientesDetalle: lista, totalesGlobales: totales };
+}
+
+/** Consolidado para Finanzas → Gastos: mantenimiento + facturas y pagos a proveedores. */
+export function getFinanzasGastosResumen(limit = 200) {
+  const lim = Math.min(Math.max(1, Number(limit) || 200), 500);
+  const mant = db
+    .prepare(`SELECT COALESCE(SUM(m.costo), 0) AS s FROM mantenimiento m INNER JOIN unidades u ON u.id = m.unidad_id`)
+    .get();
+  const fact = db.prepare(`SELECT COALESCE(SUM(f.monto_total), 0) AS s FROM proveedor_facturas f WHERE f.activo = 1`).get();
+  const pag = db
+    .prepare(
+      `SELECT COALESCE(SUM(pa.monto), 0) AS s FROM proveedor_factura_pagos pa
+       INNER JOIN proveedor_facturas f ON f.id = pa.factura_id AND f.activo = 1`
+    )
+    .get();
+  const facturado = Number(fact.s) || 0;
+  const pagado = Number(pag.s) || 0;
+  const rows = db
+    .prepare(
+      `SELECT * FROM (
+        SELECT 'mantenimiento' AS tipo,
+               CAST(m.id AS TEXT) AS ref_id,
+               m.fecha_inicio AS fecha,
+               (m.tipo || ' · ' || COALESCE(NULLIF(TRIM(COALESCE(m.descripcion, '')), ''), 'Sin descripción')) AS concepto,
+               COALESCE(m.costo, 0) AS monto,
+               p.nombre_razon_social AS proveedor_nombre,
+               u.placas AS unidad_placas,
+               CASE WHEN m.proveedor_id IS NOT NULL THEN CAST(m.proveedor_id AS TEXT) END AS proveedor_id,
+               NULL AS factura_id
+        FROM mantenimiento m
+        INNER JOIN unidades u ON u.id = m.unidad_id
+        LEFT JOIN proveedores p ON p.id = m.proveedor_id
+        UNION ALL
+        SELECT 'factura_proveedor',
+               CAST(f.id AS TEXT),
+               f.fecha_emision,
+               ('Factura ' || f.numero || ' · ' || COALESCE(NULLIF(TRIM(COALESCE(f.concepto, '')), ''), 'Sin concepto')),
+               COALESCE(f.monto_total, 0),
+               pr.nombre_razon_social,
+               uf.placas,
+               CAST(pr.id AS TEXT),
+               CAST(f.id AS TEXT)
+        FROM proveedor_facturas f
+        INNER JOIN proveedores pr ON pr.id = f.proveedor_id AND pr.activo = 1
+        LEFT JOIN unidades uf ON uf.id = f.unidad_id
+        WHERE f.activo = 1
+        UNION ALL
+        SELECT 'pago_proveedor',
+               CAST(pa.id AS TEXT),
+               pa.fecha_pago,
+               ('Pago factura ' || f.numero || CASE WHEN COALESCE(TRIM(pa.metodo), '') != '' THEN (' · ' || pa.metodo) ELSE '' END),
+               COALESCE(pa.monto, 0),
+               pr.nombre_razon_social,
+               uf.placas,
+               CAST(pr.id AS TEXT),
+               CAST(f.id AS TEXT)
+        FROM proveedor_factura_pagos pa
+        INNER JOIN proveedor_facturas f ON f.id = pa.factura_id AND f.activo = 1
+        INNER JOIN proveedores pr ON pr.id = f.proveedor_id
+        LEFT JOIN unidades uf ON uf.id = f.unidad_id
+      )
+      ORDER BY fecha DESC, tipo ASC
+      LIMIT ?`
+    )
+    .all(lim);
+  return {
+    totales: {
+      mantenimiento: Number(mant.s) || 0,
+      proveedoresFacturado: facturado,
+      proveedoresPagado: pagado,
+      proveedoresSaldo: facturado - pagado,
+    },
+    movimientos: rows.map((r) => ({
+      tipo: r.tipo,
+      id: r.ref_id,
+      fecha: r.fecha,
+      concepto: r.concepto,
+      monto: Number(r.monto) || 0,
+      proveedorNombre: r.proveedor_nombre || null,
+      unidadPlacas: r.unidad_placas || null,
+      proveedorId: r.proveedor_id || null,
+      facturaId: r.factura_id || null,
+    })),
+  };
 }
 
 export function getReporteProveedoresPorUnidad() {

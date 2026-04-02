@@ -6,43 +6,86 @@ import { useAuth } from '../../context/AuthContext';
 const STORAGE_KEY = 'skyline_sidebar_collapsed';
 
 const ROLES_CATALOGO_FLOTAS = ['administrador', 'supervisor', 'operador', 'consulta'] as const;
+const ROLES_ADMIN_FIN = ['administrador', 'supervisor'] as const;
 
-const navItems = [
-  { path: '/', label: 'Inicio', icon: 'mdi:view-dashboard' },
-  {
-    path: '/unidades',
-    label: 'Control de Unidades',
-    icon: 'mdi:car-side',
-    roles: [...ROLES_CATALOGO_FLOTAS],
-  },
-  {
-    path: '/rentas',
-    label: 'Gestión de Rentas',
-    icon: 'mdi:calendar-month',
-    roles: [...ROLES_CATALOGO_FLOTAS],
-  },
-  {
-    path: '/clientes',
-    label: 'Clientes',
-    icon: 'mdi:account-tie',
-    roles: [...ROLES_CATALOGO_FLOTAS],
-  },
-  { path: '/checkinout', label: 'Check-in / Check-out', icon: 'mdi:clipboard-check-outline' },
-  { path: '/mantenimiento', label: 'Mantenimiento', icon: 'mdi:wrench' },
-  { path: '/administracion', label: 'Administración y Proveedores', icon: 'mdi:domain', roles: ['administrador', 'supervisor'] },
-];
+type NavLinkItem = {
+  path: string;
+  label: string;
+  icon: string;
+  /** Solo ruta exacta (p. ej. inicio). */
+  end?: boolean;
+  roles?: readonly string[];
+};
 
-const navItemsBelow = [
-  { path: '/usuarios', label: 'Usuarios', icon: 'mdi:account-cog', roles: ['administrador'] },
-  { path: '/reportes', label: 'Reportes', icon: 'mdi:chart-box', roles: ['administrador', 'supervisor'] },
-  { path: '/actividad', label: 'Actividad', icon: 'mdi:history', roles: ['administrador', 'supervisor'] },
-  { path: '/configuracion', label: 'Configuración', icon: 'mdi:cog', roles: ['administrador'] },
+type NavSection = {
+  title: string;
+  items: NavLinkItem[];
+};
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    title: 'OPERACIONES',
+    items: [
+      { path: '/', label: 'Inicio', icon: 'mdi:view-dashboard', end: true },
+      { path: '/unidades', label: 'Unidades', icon: 'mdi:car-side', roles: [...ROLES_CATALOGO_FLOTAS] },
+      { path: '/clientes', label: 'Clientes', icon: 'mdi:account-tie', roles: [...ROLES_CATALOGO_FLOTAS] },
+      { path: '/checkinout', label: 'Check-in / Check-out', icon: 'mdi:clipboard-check-outline' },
+    ],
+  },
+  {
+    title: 'FINANZAS',
+    items: [
+      { path: '/rentas', label: 'Rentas', icon: 'mdi:calendar-month', roles: [...ROLES_CATALOGO_FLOTAS] },
+      { path: '/pagos', label: 'Pagos', icon: 'mdi:cash-multiple', roles: [...ROLES_CATALOGO_FLOTAS] },
+      { path: '/gastos', label: 'Gastos', icon: 'mdi:chart-timeline-variant', roles: [...ROLES_ADMIN_FIN] },
+    ],
+  },
+  {
+    title: 'GESTIÓN',
+    items: [
+      { path: '/mantenimiento', label: 'Mantenimiento', icon: 'mdi:wrench' },
+      {
+        path: '/administracion/proveedores',
+        label: 'Proveedores',
+        icon: 'mdi:truck-delivery-outline',
+        roles: [...ROLES_ADMIN_FIN],
+      },
+    ],
+  },
+  {
+    title: 'ANÁLISIS',
+    items: [
+      { path: '/reportes', label: 'Reportes', icon: 'mdi:chart-box', roles: [...ROLES_ADMIN_FIN] },
+      { path: '/actividad', label: 'Actividad', icon: 'mdi:history', roles: [...ROLES_ADMIN_FIN] },
+    ],
+  },
+  {
+    title: 'SISTEMA',
+    items: [
+      { path: '/usuarios', label: 'Usuarios', icon: 'mdi:account-cog', roles: ['administrador'] },
+      { path: '/configuracion', label: 'Configuración', icon: 'mdi:cog', roles: ['administrador'] },
+    ],
+  },
 ];
 
 type SidebarProps = {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
 };
+
+function SectionDivider({ title, collapsed }: { title: string; collapsed: boolean }) {
+  return (
+    <div className={`flex items-center gap-2 py-3 ${collapsed ? 'md:py-2.5' : ''}`} role="presentation">
+      <div className="h-px min-w-2 flex-1 bg-white/15" aria-hidden />
+      <span
+        className={`max-w-[11rem] shrink-0 px-0.5 text-center text-[9px] font-semibold uppercase leading-tight tracking-[0.1em] text-white/70 sm:max-w-none ${collapsed ? 'md:hidden' : ''}`}
+      >
+        {title}
+      </span>
+      <div className="h-px min-w-2 flex-1 bg-white/15" aria-hidden />
+    </div>
+  );
+}
 
 export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
   const { user, logout, hasRole } = useAuth();
@@ -61,12 +104,12 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
     } catch {}
   }, [collapsed]);
 
-  const visibleNavItems = navItems.filter(
-    (item) => !('roles' in item && item.roles) || hasRole(...(item.roles ?? []))
-  );
-  const visibleBelow = navItemsBelow.filter(
-    (item) => !('roles' in item && item.roles) || hasRole(...(item.roles ?? []))
-  );
+  const filteredSections = NAV_SECTIONS.map((section) => ({
+    title: section.title,
+    items: section.items.filter(
+      (item) => !('roles' in item && item.roles) || hasRole(...(item.roles ?? [])),
+    ),
+  })).filter((s) => s.items.length > 0);
 
   function handleLogout() {
     onMobileClose?.();
@@ -91,11 +134,11 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
 
       <aside
         id="app-sidebar"
-        className={`fixed left-0 top-0 z-[55] flex h-[100dvh] max-h-[100dvh] flex-col bg-skyline-blue shadow-lg transition-[transform,width] duration-200 ease-out max-md:w-[min(288px,calc(100vw-1.25rem))] ${desktopWidth} ${
+        className={`fixed left-0 top-0 z-[55] flex h-[100dvh] max-h-[100dvh] min-h-0 flex-col bg-skyline-blue shadow-lg transition-[transform,width] duration-200 ease-out max-md:w-[min(288px,calc(100vw-1.25rem))] ${desktopWidth} ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         } md:translate-x-0`}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-3 md:justify-center md:px-4 md:py-6">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-3 py-3 md:justify-center md:px-4 md:py-6">
           <div className="flex min-w-0 flex-1 justify-center md:flex-none">
             {collapsed ? (
               <>
@@ -125,35 +168,17 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
           </button>
         </div>
 
-        <nav className={`flex-1 overflow-y-auto overscroll-contain p-3 ${collapsed ? 'md:p-2' : ''}`}>
-          {visibleNavItems.map(({ path, label, icon }) => (
-            <NavLink
-              key={path}
-              to={path}
-              end={path === '/'}
-              title={collapsed ? label : undefined}
-              onClick={closeIfMobile}
-              className={({ isActive }) =>
-                `${linkBase} ${isActive ? linkActive : linkInactive} gap-3 px-3 py-2.5 ${
-                  collapsed ? 'md:justify-center md:gap-0 md:px-2 md:py-2.5' : ''
-                }`
-              }
-            >
-              <Icon
-                icon={icon}
-                className={`shrink-0 ${collapsed ? 'size-5 md:size-6' : 'size-5'}`}
-                aria-hidden
-              />
-              <span className={`min-w-0 flex-1 ${collapsed ? 'md:hidden' : ''}`}>{label}</span>
-            </NavLink>
-          ))}
-          {visibleBelow.length > 0 && (
-            <>
-              <hr className="my-3 border-white/15" />
-              {visibleBelow.map(({ path, label, icon }) => (
+        <nav
+          className={`sidebar-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-3 [scrollbar-gutter:stable] ${collapsed ? 'md:p-2' : ''}`}
+        >
+          {filteredSections.map((section) => (
+            <div key={section.title}>
+              <SectionDivider title={section.title} collapsed={collapsed} />
+              {section.items.map(({ path, label, icon, end }) => (
                 <NavLink
                   key={path}
                   to={path}
+                  end={end ?? path === '/'}
                   title={collapsed ? label : undefined}
                   onClick={closeIfMobile}
                   className={({ isActive }) =>
@@ -170,11 +195,11 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
                   <span className={`min-w-0 flex-1 ${collapsed ? 'md:hidden' : ''}`}>{label}</span>
                 </NavLink>
               ))}
-            </>
-          )}
+            </div>
+          ))}
         </nav>
 
-        <div className={`border-t border-white/10 p-4 ${collapsed ? 'md:p-2' : ''}`}>
+        <div className={`shrink-0 border-t border-white/10 p-4 ${collapsed ? 'md:p-2' : ''}`}>
           <div
             className={
               collapsed ? 'flex flex-col gap-3 max-md:items-stretch md:items-center md:gap-2' : ''

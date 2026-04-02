@@ -1,4 +1,27 @@
+import { Icon } from '@iconify/react';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  CRUD_CELDA_PRIMARIO_LEFT,
+  CRUD_CELDA_SEC_LEFT,
+  CRUD_ERROR_BANNER,
+  CRUD_FILTER_GRID,
+  CRUD_HEADER_ROW,
+  CRUD_PAGE_SUBTITLE,
+  CRUD_PAGE_TITLE,
+  CRUD_SEARCH_INNER,
+  CRUD_SEARCH_INPUT,
+  CRUD_SEARCH_LABEL,
+  CRUD_SELECT,
+  CRUD_SPINNER,
+  CRUD_SPINNER_WRAP,
+  CRUD_TABLE,
+  CRUD_TABLE_OUTER,
+  CRUD_TBODY,
+  CRUD_THEAD_TR,
+  CRUD_TOOLBAR,
+  CrudTableTh,
+  crudTableRowClass,
+} from '../components/crud/crudCorporativo';
 import { useNotification } from '../context/NotificationContext';
 import {
   getMantenimientos,
@@ -209,10 +232,10 @@ export function Mantenimiento() {
 
   return (
     <div>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+      <header className={CRUD_HEADER_ROW}>
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Mantenimiento</h1>
-          <p className="mt-1 text-sm font-medium text-gray-500">
+          <h1 className={CRUD_PAGE_TITLE}>Mantenimiento</h1>
+          <p className={CRUD_PAGE_SUBTITLE}>
             Asigna unidad y proveedor de servicio; el costo se acumula en el expediente del proveedor en Administración.
           </p>
         </div>
@@ -221,9 +244,7 @@ export function Mantenimiento() {
         </button>
       </header>
 
-      {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>
-      )}
+      {error && <div className={CRUD_ERROR_BANNER}>{error}</div>}
 
       <div className="mb-6 grid gap-6 lg:grid-cols-2">
         <div className="rounded-lg border border-skyline-border bg-white p-6 shadow-sm">
@@ -313,116 +334,132 @@ export function Mantenimiento() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-skyline-border bg-white p-6 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="rounded-lg border border-skyline-border bg-white p-4 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-gray-900">Todos los registros</h2>
           {!loading && (
-            <p className="text-sm text-gray-500">
-              Mostrando{' '}
-              <span className="font-medium text-gray-700">{mantenimientosFiltrados.length}</span> de{' '}
-              {mantenimientos.length}
+            <p className="text-xs leading-relaxed text-gray-600">
+              <span className="font-semibold text-gray-900">
+                {mantenimientosFiltrados.length} de {mantenimientos.length}
+              </span>{' '}
+              registros · Clic en una fila para editar.
             </p>
           )}
         </div>
 
         {!loading && (
-          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-skyline-border bg-skyline-bg/40 p-4 sm:flex-row sm:flex-wrap sm:items-end">
-            <div className="min-w-[min(100%,220px)] flex-1">
-              <label htmlFor="mant-busqueda" className="mb-1 block text-xs font-medium text-gray-600">
-                Buscar
-              </label>
-              <input
-                id="mant-busqueda"
-                type="search"
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                placeholder="Núm. económico, placas, descripción, tipo…"
-                className="input w-full"
-                autoComplete="off"
-              />
-            </div>
-            <div className="min-w-[140px]">
-              <label htmlFor="mant-unidad" className="mb-1 block text-xs font-medium text-gray-600">
+          <div className={`${CRUD_TOOLBAR} mb-4`}>
+            <label htmlFor="mant-busqueda" className="block min-w-0 flex-1 lg:max-w-md">
+              <span className={CRUD_SEARCH_LABEL}>Buscar</span>
+              <div className={CRUD_SEARCH_INNER}>
+                <Icon icon="mdi:magnify" className="size-4 shrink-0 text-skyline-muted" aria-hidden />
+                <input
+                  id="mant-busqueda"
+                  type="search"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Núm. económico, placas, descripción, tipo…"
+                  className={CRUD_SEARCH_INPUT}
+                  autoComplete="off"
+                />
+              </div>
+            </label>
+            <div className={`${CRUD_FILTER_GRID} mt-2`}>
+              <label className={`block ${CRUD_SEARCH_LABEL}`}>
                 Unidad
+                <select
+                  id="mant-unidad"
+                  value={filtroUnidadId}
+                  onChange={(e) => setFiltroUnidadId(e.target.value)}
+                  className={CRUD_SELECT}
+                >
+                  <option value="">Todas</option>
+                  {unidades.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {etiquetaUnidadLista(u)}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <select
-                id="mant-unidad"
-                value={filtroUnidadId}
-                onChange={(e) => setFiltroUnidadId(e.target.value)}
-                className="input w-full"
-              >
-                <option value="">Todas</option>
-                {unidades.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {etiquetaUnidadLista(u)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="min-w-[130px]">
-              <label htmlFor="mant-tipo" className="mb-1 block text-xs font-medium text-gray-600">
+              <label className={`block ${CRUD_SEARCH_LABEL}`}>
                 Tipo
+                <select
+                  id="mant-tipo"
+                  value={filtroTipo}
+                  onChange={(e) => setFiltroTipo(e.target.value)}
+                  className={CRUD_SELECT}
+                >
+                  <option value="">Todos</option>
+                  {TIPOS.map((t) => (
+                    <option key={t.v} value={t.v}>
+                      {t.l}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <select
-                id="mant-tipo"
-                value={filtroTipo}
-                onChange={(e) => setFiltroTipo(e.target.value)}
-                className="input w-full"
-              >
-                <option value="">Todos</option>
-                {TIPOS.map((t) => (
-                  <option key={t.v} value={t.v}>
-                    {t.l}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="min-w-[140px]">
-              <label htmlFor="mant-estado" className="mb-1 block text-xs font-medium text-gray-600">
+              <label className={`block ${CRUD_SEARCH_LABEL}`}>
                 Estado
+                <select
+                  id="mant-estado"
+                  value={filtroEstado}
+                  onChange={(e) => setFiltroEstado(e.target.value)}
+                  className={CRUD_SELECT}
+                >
+                  <option value="">Todos</option>
+                  {ESTADOS.map((e) => (
+                    <option key={e.v} value={e.v}>
+                      {e.l}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <select
-                id="mant-estado"
-                value={filtroEstado}
-                onChange={(e) => setFiltroEstado(e.target.value)}
-                className="input w-full"
-              >
-                <option value="">Todos</option>
-                {ESTADOS.map((e) => (
-                  <option key={e.v} value={e.v}>
-                    {e.l}
-                  </option>
-                ))}
-              </select>
             </div>
             {hayFiltros && (
-              <button type="button" onClick={limpiarFiltros} className="btn btn-outline text-sm sm:mb-0">
-                Limpiar filtros
-              </button>
+              <div className="mt-2">
+                <button type="button" onClick={limpiarFiltros} className="btn btn-outline btn-sm">
+                  Limpiar filtros
+                </button>
+              </div>
             )}
           </div>
         )}
 
         {loading ? (
-          <p className="text-sm text-gray-500">Cargando...</p>
+          <div className={CRUD_SPINNER_WRAP}>
+            <div className={CRUD_SPINNER} />
+          </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className={CRUD_TABLE_OUTER}>
+            <table className={CRUD_TABLE}>
               <thead>
-                <tr className="border-b border-skyline-border text-left">
-                  <th className="py-2 font-medium text-gray-600">Unidad</th>
-                  <th className="py-2 font-medium text-gray-600">Proveedor</th>
-                  <th className="py-2 font-medium text-gray-600">Tipo</th>
-                  <th className="py-2 font-medium text-gray-600">Descripción</th>
-                  <th className="py-2 font-medium text-gray-600">Fechas</th>
-                  <th className="py-2 font-medium text-gray-600">Costo</th>
-                  <th className="py-2 font-medium text-gray-600">Estado</th>
+                <tr className={CRUD_THEAD_TR}>
+                  <CrudTableTh className="min-w-[7rem] px-2 py-3.5 text-left align-middle" icon="mdi:truck-outline" align="start">
+                    Unidad
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[7rem] px-2 py-3.5 text-left align-middle" icon="mdi:domain" align="start">
+                    Proveedor
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3.5 text-left align-middle" icon="mdi:wrench-outline" align="start">
+                    Tipo
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[8rem] px-2 py-3.5 text-left align-middle" icon="mdi:text-box-outline" align="start">
+                    Descripción
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[7rem] px-2 py-3.5 text-left align-middle" icon="mdi:calendar-range" align="start">
+                    Fechas
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3.5 text-left align-middle" icon="mdi:cash-multiple" align="start">
+                    Costo
+                  </CrudTableTh>
+                  <CrudTableTh className="min-w-[5rem] px-2 py-3.5 text-left align-middle" icon="mdi:bookmark-check-outline" align="start">
+                    Estado
+                  </CrudTableTh>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={CRUD_TBODY}>
                 {mantenimientosFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-10 text-center text-gray-500">
+                    <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
                       {mantenimientos.length === 0
                         ? 'Sin registros. Usa «Registrar servicio» para agregar uno.'
                         : hayFiltros
@@ -431,36 +468,38 @@ export function Mantenimiento() {
                     </td>
                   </tr>
                 ) : (
-                  mantenimientosFiltrados.map((m) => (
+                  mantenimientosFiltrados.map((m, rowIdx) => (
                     <tr
                       key={m.id}
-                      className="cursor-pointer border-b border-skyline-border hover:bg-skyline-bg"
+                      className={crudTableRowClass(rowIdx, { clickable: true })}
                       onClick={() => abrirEditar(m)}
                     >
-                      <td className="py-2 font-medium">
+                      <td className="px-3 py-2.5 align-middle">
                         {(m.numeroEconomico ?? '').trim() ? (
                           <span className="block">
-                            <span className="font-semibold tabular-nums">{(m.numeroEconomico ?? '').trim()}</span>
-                            <span className="block text-xs font-normal text-gray-600">{m.placas ?? m.unidadId}</span>
+                            <span className={CRUD_CELDA_PRIMARIO_LEFT}>{(m.numeroEconomico ?? '').trim()}</span>
+                            <span className={`block text-xs ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>{m.placas ?? m.unidadId}</span>
                           </span>
                         ) : (
-                          (m.placas ?? m.unidadId)
+                          <span className={CRUD_CELDA_SEC_LEFT}>{m.placas ?? m.unidadId}</span>
                         )}
                       </td>
-                      <td className="py-2 text-gray-700">
+                      <td className={`px-3 py-2.5 align-middle ${CRUD_CELDA_SEC_LEFT}`}>
                         {m.proveedorNombre ? (
-                          <span className="text-sm">{m.proveedorNombre}</span>
+                          <span>{m.proveedorNombre}</span>
                         ) : (
-                          <span className="text-gray-400">—</span>
+                          <span className="text-slate-400">—</span>
                         )}
                       </td>
-                      <td className="py-2 capitalize">{m.tipo}</td>
-                      <td className="py-2 max-w-[200px] truncate">{m.descripcion || '-'}</td>
-                      <td className="py-2 text-gray-600">
+                      <td className={`px-3 py-2.5 align-middle capitalize ${CRUD_CELDA_SEC_LEFT}`}>{m.tipo}</td>
+                      <td className={`max-w-[200px] truncate px-3 py-2.5 align-middle ${CRUD_CELDA_SEC_LEFT}`}>{m.descripcion || '-'}</td>
+                      <td className={`px-3 py-2.5 align-middle ${CRUD_CELDA_SEC_LEFT} text-slate-600`}>
                         {formatearFecha(m.fechaInicio)} → {formatearFecha(m.fechaFin ?? '')}
                       </td>
-                      <td className="py-2">${(m.costo ?? 0).toLocaleString('es-MX')}</td>
-                      <td className="py-2">
+                      <td className={`px-3 py-2.5 align-middle tabular-nums font-semibold ${CRUD_CELDA_SEC_LEFT}`}>
+                        ${(m.costo ?? 0).toLocaleString('es-MX')}
+                      </td>
+                      <td className="px-3 py-2.5 align-middle">
                         <span
                           className={`rounded px-1.5 py-0.5 text-xs ${
                             m.estado === 'completado'

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useNotification } from '../context/NotificationContext';
 import {
   getRenta,
@@ -11,8 +11,10 @@ import {
 } from '../api/client';
 import { Icon } from '@iconify/react';
 import { MapRoute } from '../components/MapRoute';
+import { CrudActionGroup, CrudActionIconAnchor, CrudActionIconButton, CrudActionIconLink } from '../components/crud/crudCorporativo';
 import { descargarComprobanteRentaPdf } from '../lib/comprobanteRenta';
 import { labelTipoUnidad } from '../lib/tipoUnidadCatalogo';
+import { notifyRentasListChanged } from '../lib/rentasListSync';
 
 const ESTADOS: Record<string, { label: string; color: string }> = {
   reservada: { label: 'Reservada', color: 'bg-amber-100 text-amber-800' },
@@ -100,6 +102,7 @@ export function RentaDetalle() {
       });
       setRenta(r);
       setPagoMonto('');
+      notifyRentasListChanged();
       toast('Pago registrado correctamente');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Error al registrar pago', 'error');
@@ -168,14 +171,9 @@ export function RentaDetalle() {
         <span className={`badge shrink-0 ${ESTADOS[renta.estado]?.color ?? 'bg-gray-100'}`}>
           {ESTADOS[renta.estado]?.label ?? renta.estado}
         </span>
-        <button
-          type="button"
-          onClick={exportarComprobantePdf}
-          className="btn btn-outline inline-flex shrink-0 items-center gap-2"
-        >
-          <Icon icon="mdi:file-pdf-box" className="size-5 text-red-600" aria-hidden />
-          Comprobante PDF
-        </button>
+        <CrudActionGroup aria-label="Exportar">
+          <CrudActionIconButton icon="mdi:file-pdf-box" title="Descargar comprobante PDF" onClick={exportarComprobantePdf} />
+        </CrudActionGroup>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -204,13 +202,13 @@ export function RentaDetalle() {
             </dl>
             {renta.clienteId ? (
               <div className="mt-4">
-                <Link
-                  to={`/clientes/${renta.clienteId}`}
-                  className="btn btn-outline inline-flex items-center gap-2 text-sm"
-                >
-                  <Icon icon="mdi:folder-account" className="size-5 text-skyline-blue" aria-hidden />
-                  Ver expediente en catálogo de clientes
-                </Link>
+                <CrudActionGroup aria-label="Cliente">
+                  <CrudActionIconLink
+                    to={`/clientes/${renta.clienteId}`}
+                    icon="mdi:folder-account-outline"
+                    title="Ver expediente en catálogo de clientes"
+                  />
+                </CrudActionGroup>
               </div>
             ) : null}
           </div>
@@ -455,11 +453,11 @@ export function RentaDetalle() {
           </label>
           <ul className="space-y-2">
             {(renta.documentos || []).map((d) => (
-              <li key={d.id} className="flex items-center justify-between rounded border border-skyline-border p-2">
-                <span className="text-sm">{d.nombre}</span>
-                <a href={`/uploads/${d.ruta}`} target="_blank" rel="noreferrer" className="text-sky-600 text-sm hover:underline">
-                  Ver
-                </a>
+              <li key={d.id} className="flex items-center justify-between gap-2 rounded border border-skyline-border p-2">
+                <span className="min-w-0 flex-1 text-sm">{d.nombre}</span>
+                <CrudActionGroup aria-label="Documento">
+                  <CrudActionIconAnchor href={`/uploads/${d.ruta}`} icon="mdi:open-in-new" title="Ver documento" />
+                </CrudActionGroup>
               </li>
             ))}
           </ul>

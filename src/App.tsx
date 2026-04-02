@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { ToastContainer } from './components/ToastContainer';
+import { IdleSessionWatcher } from './components/IdleSessionWatcher';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { MainLayout } from './components/Layout/MainLayout';
 import { Login } from './pages/Login';
@@ -22,9 +23,12 @@ import { Reportes } from './pages/Reportes';
 import { Actividad } from './pages/Actividad';
 import { Configuracion } from './pages/Configuracion';
 import { Perfil } from './pages/Perfil';
+import { FinanzasPagos } from './pages/FinanzasPagos';
+import { FinanzasGastos } from './pages/FinanzasGastos';
 
 /** Menú unidades, rentas y clientes: no aplica a operador_taller (solo taller / patio). */
 const ROLES_CATALOGO_FLOTAS = ['administrador', 'supervisor', 'operador', 'consulta'] as const;
+const ROLES_ADMIN_FIN = ['administrador', 'supervisor'] as const;
 
 function App() {
   return (
@@ -32,6 +36,7 @@ function App() {
       <AuthProvider>
         <NotificationProvider>
           <ToastContainer />
+          <IdleSessionWatcher />
           <Routes>
           <Route path="/login" element={<Login />} />
           <Route
@@ -65,6 +70,22 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={[...ROLES_CATALOGO_FLOTAS]}>
                   <RentaDetalle />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="pagos"
+              element={
+                <ProtectedRoute allowedRoles={[...ROLES_CATALOGO_FLOTAS]}>
+                  <FinanzasPagos />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="gastos"
+              element={
+                <ProtectedRoute allowedRoles={[...ROLES_ADMIN_FIN]}>
+                  <FinanzasGastos />
                 </ProtectedRoute>
               }
             />
