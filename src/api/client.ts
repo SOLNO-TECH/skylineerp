@@ -942,6 +942,12 @@ export type RentaRow = {
   pagosCount?: number;
   /** En listado GET /rentas: fecha del último pago (YYYY-MM-DD). */
   ultimaFechaPago?: string;
+  /** Calendario: del 1 al último día del mes (por defecto). */
+  facturacionMesNatural?: boolean;
+  /** Día del mes en que inicia cada periodo de facturación (si mesNatural es false). */
+  facturacionPeriodoDesdeDia?: number;
+  /** Día del mes en que termina cada periodo; si es menor que desde, el periodo cruza al mes siguiente (ej. 15 → 14). */
+  facturacionPeriodoHastaDia?: number;
   refrigerado?: RentaRefrigerado | null;
   maquinaria?: RentaMaquinaria | null;
   pagos?: PagoRow[];
@@ -960,6 +966,9 @@ export type RentaCalendario = {
   fechaFin: string;
   estado: string;
   estadoLogistico?: string;
+  facturacionMesNatural?: boolean;
+  facturacionPeriodoDesdeDia?: number;
+  facturacionPeriodoHastaDia?: number;
 };
 
 export type ActividadItem = {
@@ -1180,6 +1189,9 @@ export async function createRenta(p: {
   operadorAsignado?: string;
   refrigerado?: Partial<RentaRefrigerado>;
   maquinaria?: Partial<RentaMaquinaria>;
+  facturacionMesNatural?: boolean;
+  facturacionPeriodoDesdeDia?: number;
+  facturacionPeriodoHastaDia?: number;
 }): Promise<RentaRow> {
   const res = await fetchWithAuth(`${API_BASE}/rentas`, {
     method: 'POST',
@@ -1202,6 +1214,9 @@ export async function createRenta(p: {
       operadorAsignado: p.operadorAsignado ?? '',
       refrigerado: p.refrigerado,
       maquinaria: p.maquinaria,
+      facturacionMesNatural: p.facturacionMesNatural,
+      facturacionPeriodoDesdeDia: p.facturacionPeriodoDesdeDia,
+      facturacionPeriodoHastaDia: p.facturacionPeriodoHastaDia,
     }),
   });
   const data = await parseResponse<{ renta?: RentaRow; error?: string }>(res);
@@ -1232,6 +1247,9 @@ export async function updateRenta(
     operadorAsignado: string;
     refrigerado: Partial<RentaRefrigerado>;
     maquinaria: Partial<RentaMaquinaria>;
+    facturacionMesNatural: boolean;
+    facturacionPeriodoDesdeDia: number;
+    facturacionPeriodoHastaDia: number;
   }>
 ): Promise<RentaRow> {
   const res = await fetchWithAuth(`${API_BASE}/rentas/${id}`, {

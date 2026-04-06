@@ -358,6 +358,9 @@ function migrarRentas() {
     if (!cols.includes('precio_base')) db.exec('ALTER TABLE rentas ADD COLUMN precio_base REAL DEFAULT 0');
     if (!cols.includes('extras')) db.exec('ALTER TABLE rentas ADD COLUMN extras REAL DEFAULT 0');
     if (!cols.includes('operador_asignado')) db.exec("ALTER TABLE rentas ADD COLUMN operador_asignado TEXT DEFAULT ''");
+    if (!cols.includes('facturacion_mes_natural')) db.exec('ALTER TABLE rentas ADD COLUMN facturacion_mes_natural INTEGER DEFAULT 1');
+    if (!cols.includes('facturacion_periodo_desde_dia')) db.exec('ALTER TABLE rentas ADD COLUMN facturacion_periodo_desde_dia INTEGER');
+    if (!cols.includes('facturacion_periodo_hasta_dia')) db.exec('ALTER TABLE rentas ADD COLUMN facturacion_periodo_hasta_dia INTEGER');
   } catch (e) { console.warn('Migración rentas:', e?.message); }
 }
 
@@ -446,6 +449,8 @@ export function getAllRentas() {
     `SELECT r.id, r.unidad_id, r.cliente_id, r.cliente_nombre, r.cliente_telefono, r.cliente_email, r.fecha_inicio, r.fecha_fin, r.estado,
             r.monto, r.deposito, r.observaciones, r.creado_en,
             r.tipo_servicio, r.ubicacion_entrega, r.ubicacion_recoleccion, r.estado_logistico, r.precio_base, r.extras, r.operador_asignado,
+            COALESCE(r.facturacion_mes_natural, 1) as facturacion_mes_natural,
+            r.facturacion_periodo_desde_dia, r.facturacion_periodo_hasta_dia,
             u.placas, COALESCE(u.numero_economico, '') as numero_economico, u.marca, u.modelo, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad,
             COALESCE((SELECT SUM(p.monto) FROM pagos p WHERE p.renta_id = r.id), 0) AS total_pagado,
             (SELECT COUNT(*) FROM pagos p WHERE p.renta_id = r.id) AS pagos_count,
@@ -492,6 +497,15 @@ function mapRentaRow(r) {
     precioBase: r.precio_base != null ? r.precio_base : (r.monto || 0),
     extras: r.extras != null ? r.extras : 0,
     operadorAsignado: r.operador_asignado || '',
+    facturacionMesNatural: r.facturacion_mes_natural == null || Number(r.facturacion_mes_natural) !== 0,
+    facturacionPeriodoDesdeDia:
+      r.facturacion_periodo_desde_dia != null && r.facturacion_periodo_desde_dia !== ''
+        ? Number(r.facturacion_periodo_desde_dia)
+        : undefined,
+    facturacionPeriodoHastaDia:
+      r.facturacion_periodo_hasta_dia != null && r.facturacion_periodo_hasta_dia !== ''
+        ? Number(r.facturacion_periodo_hasta_dia)
+        : undefined,
   };
 }
 
@@ -554,6 +568,7 @@ export function createRenta(data, usuarioId = null) {
     unidadId, clienteNombre, clienteTelefono, clienteEmail, clienteId, fechaInicio, fechaFin,
     monto, deposito, observaciones, tipoServicio, ubicacionEntrega, ubicacionRecoleccion,
     precioBase, extras, operadorAsignado, refrigerado, maquinaria,
+    facturacionMesNatural, facturacionPeriodoDesdeDia, facturacionPeriodoHastaDia,
   } = data;
   let resolvedNombre = String(clienteNombre || '').trim();
   let resolvedTel = String(clienteTelefono || '').trim();
@@ -580,10 +595,20 @@ export function createRenta(data, usuarioId = null) {
   if (!u) return null;
   if (fechaInicio > fechaFin) return null;
   const total = (Number(precioBase) || 0) + (Number(extras) || 0) || Number(monto) || 0;
+  const mesNat = facturacionMesNatural !== false && facturacionMesNatural !== 0 && facturacionMesNatural !== '0';
+  const desdeDia =
+    mesNat || facturacionPeriodoDesdeDia == null || facturacionPeriodoDesdeDia === ''
+      ? null
+      : Number(facturacionPeriodoDesdeDia);
+  const hastaDia =
+    mesNat || facturacionPeriodoHastaDia == null || facturacionPeriodoHastaDia === ''
+      ? null
+      : Number(facturacionPeriodoHastaDia);
   const r = db.prepare(
     `INSERT INTO rentas (unidad_id, cliente_id, cliente_nombre, cliente_telefono, cliente_email, fecha_inicio, fecha_fin, estado, monto, deposito, observaciones,
-      tipo_servicio, ubicacion_entrega, ubicacion_recoleccion, estado_logistico, precio_base, extras, operador_asignado)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'reservada', ?, ?, ?, ?, ?, ?, 'programado', ?, ?, ?)`
+      tipo_servicio, ubicacion_entrega, ubicacion_recoleccion, estado_logistico, precio_base, extras, operador_asignado,
+      facturacion_mes_natural, facturacion_periodo_desde_dia, facturacion_periodo_hasta_dia)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'reservada', ?, ?, ?, ?, ?, ?, 'programado', ?, ?, ?, ?, ?, ?)`
   ).run(
     Number(unidadId),
     resolvedClienteId,
@@ -600,7 +625,10 @@ export function createRenta(data, usuarioId = null) {
     String(ubicacionRecoleccion || '').trim(),
     Number(precioBase) || 0,
     Number(extras) || 0,
-    String(operadorAsignado || '').trim()
+    String(operadorAsignado || '').trim(),
+    mesNat ? 1 : 0,
+    desdeDia,
+    hastaDia
   );
   const rentaId = r.lastInsertRowid;
   if (unidadUsaDatosRefrigeracion(u.tipo_unidad) && refrigerado) {
@@ -671,6 +699,7 @@ export function updateRenta(id, data, usuarioId = null) {
     unidadId, clienteNombre, clienteTelefono, clienteEmail, clienteId, fechaInicio, fechaFin, estado, monto, deposito, observaciones,
     tipoServicio, ubicacionEntrega, ubicacionRecoleccion, estadoLogistico, precioBase, extras, operadorAsignado,
     refrigerado, maquinaria,
+    facturacionMesNatural, facturacionPeriodoDesdeDia, facturacionPeriodoHastaDia,
   } = data;
   if (unidadId != null) { updates.push('unidad_id = ?'); values.push(Number(unidadId)); }
   if ('clienteId' in data) {
@@ -700,6 +729,28 @@ export function updateRenta(id, data, usuarioId = null) {
   if (precioBase != null) { updates.push('precio_base = ?'); values.push(Number(precioBase) || 0); }
   if (extras != null) { updates.push('extras = ?'); values.push(Number(extras) || 0); }
   if (operadorAsignado != null) { updates.push('operador_asignado = ?'); values.push(String(operadorAsignado || '')); }
+  if (facturacionMesNatural !== undefined) {
+    const mesNat = facturacionMesNatural !== false && facturacionMesNatural !== 0 && facturacionMesNatural !== '0';
+    updates.push('facturacion_mes_natural = ?');
+    values.push(mesNat ? 1 : 0);
+    if (mesNat) {
+      updates.push('facturacion_periodo_desde_dia = NULL');
+      updates.push('facturacion_periodo_hasta_dia = NULL');
+    } else {
+      const dd =
+        facturacionPeriodoDesdeDia == null || facturacionPeriodoDesdeDia === ''
+          ? null
+          : Number(facturacionPeriodoDesdeDia);
+      const hh =
+        facturacionPeriodoHastaDia == null || facturacionPeriodoHastaDia === ''
+          ? null
+          : Number(facturacionPeriodoHastaDia);
+      updates.push('facturacion_periodo_desde_dia = ?');
+      values.push(dd);
+      updates.push('facturacion_periodo_hasta_dia = ?');
+      values.push(hh);
+    }
+  }
   if (precioBase != null || extras != null) {
     const row = db.prepare('SELECT precio_base, extras, monto FROM rentas WHERE id = ?').get(Number(id));
     const pb = precioBase != null ? Number(precioBase) || 0 : (row?.precio_base ?? 0);
@@ -1063,13 +1114,15 @@ export function getRentasPorMes(ano, mes) {
   const fin = `${ano}-${String(mes).padStart(2, '0')}-31`;
   const rows = db.prepare(
     `SELECT r.id, r.unidad_id, r.cliente_nombre, r.fecha_inicio, r.fecha_fin, r.estado, r.estado_logistico,
+            COALESCE(r.facturacion_mes_natural, 1) as facturacion_mes_natural,
+            r.facturacion_periodo_desde_dia, r.facturacion_periodo_hasta_dia,
             u.placas, COALESCE(u.numero_economico, '') as numero_economico, COALESCE(u.tipo_unidad, 'remolque_seco') as tipo_unidad
      FROM rentas r
      JOIN unidades u ON u.id = r.unidad_id AND u.activo = 1
      WHERE (r.fecha_inicio <= ? AND r.fecha_fin >= ?) OR (r.fecha_inicio BETWEEN ? AND ?)
      ORDER BY r.fecha_inicio`
   ).all(fin, inicio, inicio, fin);
-  return rows.map(r => ({
+  return rows.map((r) => ({
     id: String(r.id),
     unidadId: String(r.unidad_id),
     placas: r.placas,
@@ -1080,6 +1133,15 @@ export function getRentasPorMes(ano, mes) {
     fechaFin: r.fecha_fin,
     estado: r.estado,
     estadoLogistico: r.estado_logistico || 'programado',
+    facturacionMesNatural: r.facturacion_mes_natural == null || Number(r.facturacion_mes_natural) !== 0,
+    facturacionPeriodoDesdeDia:
+      r.facturacion_periodo_desde_dia != null && r.facturacion_periodo_desde_dia !== ''
+        ? Number(r.facturacion_periodo_desde_dia)
+        : undefined,
+    facturacionPeriodoHastaDia:
+      r.facturacion_periodo_hasta_dia != null && r.facturacion_periodo_hasta_dia !== ''
+        ? Number(r.facturacion_periodo_hasta_dia)
+        : undefined,
   }));
 }
 

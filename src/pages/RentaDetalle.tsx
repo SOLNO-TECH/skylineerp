@@ -70,6 +70,10 @@ export function RentaDetalle() {
   const [pagoMetodo, setPagoMetodo] = useState('efectivo');
   const [enviandoPago, setEnviandoPago] = useState(false);
   const [estadoLogistico, setEstadoLogistico] = useState('');
+  const [factMesNatural, setFactMesNatural] = useState(true);
+  const [factDesde, setFactDesde] = useState('1');
+  const [factHasta, setFactHasta] = useState('28');
+  const [guardandoFact, setGuardandoFact] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -79,6 +83,13 @@ export function RentaDetalle() {
       .then((r) => {
         setRenta(r);
         setEstadoLogistico(r.estadoLogistico || 'programado');
+        setFactMesNatural(r.facturacionMesNatural !== false);
+        setFactDesde(
+          r.facturacionPeriodoDesdeDia != null ? String(r.facturacionPeriodoDesdeDia) : '1',
+        );
+        setFactHasta(
+          r.facturacionPeriodoHastaDia != null ? String(r.facturacionPeriodoHastaDia) : '28',
+        );
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Error'))
       .finally(() => setLoading(false));
@@ -132,6 +143,43 @@ export function RentaDetalle() {
       toast('Estado logístico actualizado');
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Error', 'error');
+    }
+  };
+
+  const guardarFacturacionCalendario = async () => {
+    if (!id || !renta) return;
+    let desde: number | undefined;
+    let hasta: number | undefined;
+    if (!factMesNatural) {
+      desde = parseInt(factDesde, 10);
+      hasta = parseInt(factHasta, 10);
+      if (
+        !Number.isFinite(desde) ||
+        !Number.isFinite(hasta) ||
+        desde < 1 ||
+        desde > 31 ||
+        hasta < 1 ||
+        hasta > 31
+      ) {
+        toast('Indica día inicio y fin válidos (1–31).', 'error');
+        return;
+      }
+    }
+    setGuardandoFact(true);
+    try {
+      const r = await updateRenta(id, {
+        facturacionMesNatural: factMesNatural,
+        ...(factMesNatural
+          ? {}
+          : { facturacionPeriodoDesdeDia: desde, facturacionPeriodoHastaDia: hasta }),
+      });
+      setRenta(r);
+      notifyRentasListChanged();
+      toast('Criterio de facturación en calendario guardado');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Error al guardar', 'error');
+    } finally {
+      setGuardandoFact(false);
     }
   };
 
@@ -300,6 +348,64 @@ export function RentaDetalle() {
                 </dd>
               </div>
             </dl>
+          </div>
+
+          <div className="mb-6 rounded-lg border border-skyline-border p-4">
+            <h3 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              <Icon icon="mdi:calendar-text-outline" className="size-4 text-skyline-blue" aria-hidden />
+              Facturación en calendario
+            </h3>
+            <p className="mb-3 text-xs text-gray-600">
+              Define cómo se marcan las anclas en el calendario de rentas (no afecta pagos ni contrato).
+            </p>
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={factMesNatural}
+                onChange={(e) => setFactMesNatural(e.target.checked)}
+                disabled={['finalizada', 'cancelada'].includes(renta.estado)}
+              />
+              <span className="text-sm text-gray-800">Mes natural (día 1 al último del mes)</span>
+            </label>
+            {!factMesNatural && (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <label className="mb-0.5 block text-xs text-gray-600">Día inicio (1–31)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    className="input w-full text-sm"
+                    value={factDesde}
+                    onChange={(e) => setFactDesde(e.target.value)}
+                    disabled={['finalizada', 'cancelada'].includes(renta.estado)}
+                  />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-gray-600">Día fin (1–31)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    className="input w-full text-sm"
+                    value={factHasta}
+                    onChange={(e) => setFactHasta(e.target.value)}
+                    disabled={['finalizada', 'cancelada'].includes(renta.estado)}
+                  />
+                </div>
+              </div>
+            )}
+            {!['finalizada', 'cancelada'].includes(renta.estado) && (
+              <button
+                type="button"
+                onClick={guardarFacturacionCalendario}
+                disabled={guardandoFact}
+                className="btn btn-primary mt-3 text-sm"
+              >
+                {guardandoFact ? 'Guardando…' : 'Guardar criterio de facturación'}
+              </button>
+            )}
           </div>
 
           <div className="mb-6 rounded-lg border border-skyline-border p-4">

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '@iconify/react';
 import { useNotification } from '../context/NotificationContext';
@@ -172,8 +173,12 @@ function ultimoDiaDelMes(ano: number, mes: number): number {
   return new Date(ano, mes, 0).getDate();
 }
 
-/** Recorte del contrato al mes del calendario (límites de “periodo mensual” natural). */
-function periodoFacturacionEnMes(
+function rentaUsaMesNaturalCalendario(r: RentaCalendario): boolean {
+  return r.facturacionMesNatural !== false;
+}
+
+/** Recorte del contrato al mes calendario (día 1 al último del mes). */
+function periodoFacturacionEnMesNatural(
   r: RentaCalendario,
   ano: number,
   mes: number,
@@ -187,23 +192,52 @@ function periodoFacturacionEnMes(
 }
 
 /**
- * El calendario muestra la renta solo en el primer y último día facturable de ese mes dentro
- * del contrato (no en cada día intermedio).
+ * El calendario muestra anclas de facturación: mes natural (1 ↔ último día) o días del mes personalizados.
  */
 function rentaIncluyeDia(r: RentaCalendario, ano: number, mes: number, dia: number): boolean {
   const dStr = ymdISO(ano, mes, dia);
-  const p = periodoFacturacionEnMes(r, ano, mes);
-  if (!p) return false;
-  return dStr === p.inicio || dStr === p.fin;
+  if (dStr < r.fechaInicio || dStr > r.fechaFin) return false;
+  if (rentaUsaMesNaturalCalendario(r)) {
+    const p = periodoFacturacionEnMesNatural(r, ano, mes);
+    if (!p) return false;
+    return dStr === p.inicio || dStr === p.fin;
+  }
+  const desde = r.facturacionPeriodoDesdeDia;
+  const hasta = r.facturacionPeriodoHastaDia;
+  if (
+    desde == null ||
+    hasta == null ||
+    !Number.isFinite(desde) ||
+    !Number.isFinite(hasta) ||
+    desde < 1 ||
+    desde > 31 ||
+    hasta < 1 ||
+    hasta > 31
+  ) {
+    const p = periodoFacturacionEnMesNatural(r, ano, mes);
+    if (!p) return false;
+    return dStr === p.inicio || dStr === p.fin;
+  }
+  return dia === desde || dia === hasta;
 }
 
 function etiquetaAnclaCalendario(r: RentaCalendario, ano: number, mes: number, dia: number): string {
   const dStr = ymdISO(ano, mes, dia);
-  const p = periodoFacturacionEnMes(r, ano, mes);
-  if (!p) return '';
-  if (p.inicio === p.fin) return 'Inicio y fin de periodo (este día)';
-  if (dStr === p.inicio) return 'Inicio de periodo mensual en el contrato';
-  return 'Fin de periodo mensual en el contrato';
+  if (dStr < r.fechaInicio || dStr > r.fechaFin) return '';
+  if (rentaUsaMesNaturalCalendario(r)) {
+    const p = periodoFacturacionEnMesNatural(r, ano, mes);
+    if (!p) return '';
+    if (p.inicio === p.fin) return 'Inicio y fin de periodo (este día)';
+    if (dStr === p.inicio) return 'Inicio de periodo mensual en el contrato';
+    return 'Fin de periodo mensual en el contrato';
+  }
+  const desde = r.facturacionPeriodoDesdeDia;
+  const hasta = r.facturacionPeriodoHastaDia;
+  if (desde == null || hasta == null) return '';
+  if (dia === desde && dia === hasta) return 'Inicio y fin de facturación (este día)';
+  if (dia === desde) return 'Inicio de periodo de facturación (día del mes)';
+  if (dia === hasta) return 'Fin de periodo de facturación (día del mes)';
+  return '';
 }
 
 const TIPOS_SERVICIO_OPT = [
@@ -217,6 +251,22 @@ const ESTADOS_LOG_OPT = [
   { v: 'entregado', l: 'Entregado' },
   { v: 'finalizado', l: 'Finalizado' },
 ];
+const TIPOS_SERVICIO_ETIQUETA: Record<string, string> = {
+  solo_renta: 'Solo renta',
+  con_operador: 'Con operador',
+  con_transporte: 'Con transporte',
+};
+
+function filaPop(k: string, v: ReactNode) {
+  if (v == null || v === '') return null;
+  return (
+    <div className="grid grid-cols-[7.5rem_1fr] gap-x-2 gap-y-0.5 border-b border-slate-100 py-1.5 last:border-0">
+      <span className="shrink-0 font-semibold text-slate-500">{k}</span>
+      <span className="min-w-0 break-words text-slate-800">{v}</span>
+    </div>
+  );
+}
+
 export function Rentas() {
   const navigate = useNavigate();
   const { toast } = useNotification();
@@ -258,6 +308,9 @@ export function Rentas() {
     maqOperador: '',
     maqHoras: '',
     maqTrabajo: '',
+    facturacionMesNatural: true,
+    facturacionDesdeDia: '1',
+    facturacionHastaDia: '28',
   });
   const [enviando, setEnviando] = useState(false);
   const [errorForm, setErrorForm] = useState<string | null>(null);
@@ -293,6 +346,42 @@ export function Rentas() {
   useEffect(() => {
     cargar();
   }, [ano, mes]);
+
+  const rentasPorId = useMemo(() => new Map(rentas.map((r) => [r.id, r])), [rentas]);
+
+  const [calTip, setCalTip] = useState<{
+    clientX: number;
+    clientY: number;
+    cal: RentaCalendario;
+    diaVer: number;
+  } | null>(null);
+  const calTipHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearCalTipTimer = () => {
+    if (calTipHideTimer.current) {
+      clearTimeout(calTipHideTimer.current);
+      calTipHideTimer.current = null;
+    }
+  };
+
+  const scheduleHideCalTip = () => {
+    clearCalTipTimer();
+    calTipHideTimer.current = setTimeout(() => setCalTip(null), 200);
+  };
+
+  useEffect(() => () => clearCalTipTimer(), []);
+
+  const calTipPos = useMemo(() => {
+    if (!calTip || typeof window === 'undefined') return { left: 0, top: 0 };
+    const pad = 12;
+    const estW = 300;
+    const estH = 400;
+    let left = calTip.clientX + 12;
+    let top = calTip.clientY + 12;
+    left = Math.max(pad, Math.min(left, window.innerWidth - estW - pad));
+    top = Math.max(pad, Math.min(top, window.innerHeight - estH - pad));
+    return { left, top };
+  }, [calTip]);
 
   const proximasRentas = useMemo(() => {
     const hoy = hoyStr();
@@ -384,6 +473,9 @@ export function Rentas() {
       maqOperador: '',
       maqHoras: '',
       maqTrabajo: '',
+      facturacionMesNatural: true,
+      facturacionDesdeDia: '1',
+      facturacionHastaDia: '28',
     });
     setErrorForm(null);
     setModalAbierto(true);
@@ -422,6 +514,11 @@ export function Rentas() {
       maqOperador: r.maquinaria?.operadorAsignado ?? r.operadorAsignado ?? '',
       maqHoras: String(r.maquinaria?.horasTrabajadas ?? ''),
       maqTrabajo: r.maquinaria?.tipoTrabajo ?? '',
+      facturacionMesNatural: r.facturacionMesNatural !== false,
+      facturacionDesdeDia:
+        r.facturacionPeriodoDesdeDia != null ? String(r.facturacionPeriodoDesdeDia) : '1',
+      facturacionHastaDia:
+        r.facturacionPeriodoHastaDia != null ? String(r.facturacionPeriodoHastaDia) : '28',
     });
     setErrorForm(null);
     setModalAbierto(true);
@@ -459,6 +556,23 @@ export function Rentas() {
       setErrorForm('La fecha de fin debe ser posterior a la de inicio.');
       return;
     }
+    let factDesde: number | undefined;
+    let factHasta: number | undefined;
+    if (!form.facturacionMesNatural) {
+      factDesde = parseInt(form.facturacionDesdeDia, 10);
+      factHasta = parseInt(form.facturacionHastaDia, 10);
+      if (
+        !Number.isFinite(factDesde) ||
+        !Number.isFinite(factHasta) ||
+        factDesde < 1 ||
+        factDesde > 31 ||
+        factHasta < 1 ||
+        factHasta > 31
+      ) {
+        setErrorForm('Facturación: indica día de inicio y día de fin válidos (1–31).');
+        return;
+      }
+    }
     setEnviando(true);
     try {
       const pb = parseFloat(form.precioBase || form.monto) || 0;
@@ -481,6 +595,13 @@ export function Rentas() {
         precioBase: pb,
         extras: ex,
         operadorAsignado: operadorNombre,
+        facturacionMesNatural: form.facturacionMesNatural,
+        ...(form.facturacionMesNatural
+          ? {}
+          : {
+              facturacionPeriodoDesdeDia: factDesde,
+              facturacionPeriodoHastaDia: factHasta,
+            }),
       };
       if (esTipoRefrigeradoCatalogo(unidadSeleccionada?.tipoUnidad)) {
         payload.refrigerado = {
@@ -564,7 +685,13 @@ export function Rentas() {
     setMes(n.getMonth() + 1);
   };
 
+  const calTipFull = calTip ? rentasPorId.get(calTip.cal.id) : undefined;
+  const calTipAncla = calTip
+    ? etiquetaAnclaCalendario(calTip.cal, ano, mes, calTip.diaVer)
+    : '';
+
   return (
+    <>
     <div>
       <header className={CRUD_HEADER_ROW}>
         <div>
@@ -591,7 +718,7 @@ export function Rentas() {
                 <div className="min-w-0">
                   <h2 className="text-base font-semibold leading-tight text-[#162036]">Calendario de reservaciones</h2>
                   <p className="mt-0.5 text-xs leading-snug text-slate-600">
-                    El calendario marca cada renta solo en los <strong className="font-semibold text-slate-700">límites de cada mes</strong> del contrato: el primer y último día facturable de ese mes natural (dentro de la vigencia). Los días intermedios no se repiten, para contratos largos no llena todo el mes.
+                    El calendario muestra <strong className="font-semibold text-slate-700">anclas de facturación</strong>, no cada día del contrato. Por defecto son el <strong className="font-semibold text-slate-700">1</strong> y el <strong className="font-semibold text-slate-700">último día del mes</strong> natural. En cada renta puedes definir <strong className="font-semibold text-slate-700">días de inicio y fin</strong> de periodo (ej. corte el 15 y cierre el 14 del mes siguiente).
                   </p>
                 </div>
               </div>
@@ -698,8 +825,18 @@ export function Rentas() {
                                           key={r.id}
                                           type="button"
                                           onClick={() => navigate(`/rentas/${r.id}`)}
+                                          onMouseEnter={(ev) => {
+                                            clearCalTipTimer();
+                                            setCalTip({
+                                              clientX: ev.clientX,
+                                              clientY: ev.clientY,
+                                              cal: r,
+                                              diaVer: dia!,
+                                            });
+                                          }}
+                                          onMouseLeave={scheduleHideCalTip}
                                           className={`block w-full truncate rounded px-1 py-0.5 text-left text-[11px] font-medium leading-tight shadow-sm transition hover:brightness-95 ${COLOR_POR_TIPO[r.tipoUnidad ?? 'remolque_seco'] ?? ESTADOS[r.estado]?.color ?? 'bg-gray-100'} `}
-                                          title={`${etiquetaAnclaCalendario(r, ano, mes, dia!)} · Abrir expediente · ${(r.numeroEconomico ?? '').trim() ? `${(r.numeroEconomico ?? '').trim()} · ` : ''}${r.placas} — ${r.clienteNombre}`}
+                                          aria-label={`Expediente ${r.id} · ${r.clienteNombre}`}
                                         >
                                           {(r.numeroEconomico ?? '').trim() || r.placas}
                                         </button>
@@ -1295,6 +1432,55 @@ export function Rentas() {
                   />
                 </div>
               </div>
+              <div className="rounded-lg border border-skyline-border bg-slate-50/80 p-3">
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={form.facturacionMesNatural}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, facturacionMesNatural: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-gray-800">
+                      Facturación en calendario: mes natural (día 1 al último del mes)
+                    </span>
+                    <span className="mt-0.5 block text-xs text-gray-600">
+                      Si lo desmarcas, defines qué día del mes marca el inicio y el fin de cada periodo (útil para cortes distintos por cliente).
+                    </span>
+                  </span>
+                </label>
+                {!form.facturacionMesNatural && (
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-gray-700">Día inicio de periodo (1–31)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        className="input w-full text-sm"
+                        value={form.facturacionDesdeDia}
+                        onChange={(e) => setForm((f) => ({ ...f, facturacionDesdeDia: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-medium text-gray-700">Día fin de periodo (1–31)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        className="input w-full text-sm"
+                        value={form.facturacionHastaDia}
+                        onChange={(e) => setForm((f) => ({ ...f, facturacionHastaDia: e.target.value }))}
+                      />
+                    </div>
+                    <p className="col-span-2 text-[11px] leading-snug text-gray-500">
+                      Ejemplo corte quincenal: inicio <strong>15</strong>, fin <strong>14</strong> (el periodo va del 15 de un mes al 14 del siguiente). Si el fin es mayor o igual al inicio, el periodo cae dentro del mismo mes calendario.
+                    </p>
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700">Precio base</label>
@@ -1479,5 +1665,142 @@ export function Rentas() {
         </div>
       )}
     </div>
+
+      {typeof document !== 'undefined' &&
+        calTip &&
+        createPortal(
+          <div
+            role="tooltip"
+            className="pointer-events-auto z-[1000] max-h-[min(75vh,26rem)] w-[min(100vw-1.5rem,18.75rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-[11px] leading-snug shadow-2xl ring-2 ring-slate-900/10"
+            style={{ position: 'fixed', left: calTipPos.left, top: calTipPos.top }}
+            onMouseEnter={clearCalTipTimer}
+            onMouseLeave={scheduleHideCalTip}
+          >
+            <div className="mb-2 flex flex-wrap items-start justify-between gap-2 border-b border-slate-200 pb-2">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wide text-skyline-blue">
+                  Expediente #{calTip.cal.id}
+                </p>
+                <p className="mt-0.5 text-xs font-semibold text-[#162036]">{calTip.cal.clienteNombre}</p>
+              </div>
+              <span
+                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${COLOR_POR_TIPO[calTip.cal.tipoUnidad ?? 'remolque_seco'] ?? ESTADOS[calTip.cal.estado]?.color ?? 'bg-gray-100'}`}
+              >
+                {(calTip.cal.numeroEconomico ?? '').trim() || calTip.cal.placas}
+              </span>
+            </div>
+            {calTipAncla ? (
+              <p className="mb-2 rounded-md bg-sky-50 px-2 py-1 text-[10px] text-sky-900">{calTipAncla}</p>
+            ) : null}
+            <div className="space-y-0">
+              {filaPop(
+                'Cliente',
+                calTipFull?.clienteNombre?.trim() || calTip.cal.clienteNombre,
+              )}
+              {filaPop('Teléfono', calTipFull?.clienteTelefono?.trim())}
+              {filaPop('Email', calTipFull?.clienteEmail?.trim())}
+              {filaPop('Cliente ID', calTipFull?.clienteId ? `#${calTipFull.clienteId}` : null)}
+              {filaPop(
+                'Unidad',
+                <>
+                  {calTipFull
+                    ? `${(calTipFull.numeroEconomico ?? '').trim() ? `${(calTipFull.numeroEconomico ?? '').trim()} · ` : ''}${calTipFull.placas} · ${calTipFull.marca} ${calTipFull.modelo}`
+                    : `${(calTip.cal.numeroEconomico ?? '').trim() ? `${(calTip.cal.numeroEconomico ?? '').trim()} · ` : ''}${calTip.cal.placas}`}
+                </>,
+              )}
+              {filaPop('Tipo unidad', labelTipoUnidad(calTip.cal.tipoUnidad))}
+              {filaPop(
+                'Vigencia',
+                `${formatearFechaCompleta(calTip.cal.fechaInicio)} → ${formatearFechaCompleta(calTip.cal.fechaFin)}`,
+              )}
+              {filaPop('Estado', ESTADOS[calTip.cal.estado]?.label ?? calTip.cal.estado)}
+              {filaPop(
+                'Logístico',
+                ESTADOS_LOG_OPT.find((o) => o.v === calTip.cal.estadoLogistico)?.l ??
+                  calTip.cal.estadoLogistico,
+              )}
+              {filaPop(
+                'Tipo servicio',
+                calTipFull?.tipoServicio
+                  ? TIPOS_SERVICIO_ETIQUETA[calTipFull.tipoServicio] ?? calTipFull.tipoServicio
+                  : null,
+              )}
+              {filaPop('Operador', calTipFull?.operadorAsignado?.trim())}
+              {filaPop(
+                'Monto renta',
+                calTipFull != null
+                  ? `$${(calTipFull.monto ?? 0).toLocaleString('es-MX')}`
+                  : null,
+              )}
+              {filaPop(
+                'Depósito',
+                calTipFull != null
+                  ? `$${(calTipFull.deposito ?? 0).toLocaleString('es-MX')}`
+                  : null,
+              )}
+              {calTipFull != null && (calTipFull.precioBase != null || calTipFull.extras != null) ? (
+                <>
+                  {filaPop('Precio base', `$${(calTipFull.precioBase ?? 0).toLocaleString('es-MX')}`)}
+                  {filaPop('Extras', `$${(calTipFull.extras ?? 0).toLocaleString('es-MX')}`)}
+                </>
+              ) : null}
+              {filaPop(
+                'Total pagado',
+                calTipFull != null && calTipFull.totalPagado != null
+                  ? `$${calTipFull.totalPagado.toLocaleString('es-MX')}`
+                  : null,
+              )}
+              {filaPop(
+                'Saldo pendiente',
+                calTipFull != null
+                  ? `$${Math.max(
+                      0,
+                      (calTipFull.monto ?? 0) +
+                        (calTipFull.deposito ?? 0) -
+                        (calTipFull.totalPagado ?? 0),
+                    ).toLocaleString('es-MX')}`
+                  : null,
+              )}
+              {filaPop('Pagos', calTipFull?.pagosCount != null ? String(calTipFull.pagosCount) : null)}
+              {filaPop(
+                'Último pago',
+                calTipFull?.ultimaFechaPago ? formatearFechaCompleta(calTipFull.ultimaFechaPago) : null,
+              )}
+              {filaPop('Entrega', calTipFull?.ubicacionEntrega?.trim())}
+              {filaPop('Recolección', calTipFull?.ubicacionRecoleccion?.trim())}
+              {filaPop(
+                'Facturación (calendario)',
+                calTip.cal.facturacionMesNatural !== false
+                  ? 'Mes natural (día 1 — último día del mes)'
+                  : `Personalizado: día ${calTip.cal.facturacionPeriodoDesdeDia ?? '—'} → día ${calTip.cal.facturacionPeriodoHastaDia ?? '—'}`,
+              )}
+              {filaPop(
+                'Observaciones',
+                (() => {
+                  const o = calTipFull?.observaciones?.trim();
+                  if (!o) return null;
+                  return o.length > 280 ? `${o.slice(0, 280)}…` : o;
+                })(),
+              )}
+              {calTipFull?.refrigerado ? (
+                <>
+                  {filaPop('Ref. · temp. °C', String(calTipFull.refrigerado.temperaturaObjetivo ?? '—'))}
+                  {filaPop(
+                    'Ref. · combustible',
+                    `${calTipFull.refrigerado.combustibleInicio ?? '—'}% → ${calTipFull.refrigerado.combustibleFin ?? '—'}%`,
+                  )}
+                </>
+              ) : null}
+              {calTipFull?.maquinaria?.tipoTrabajo?.trim()
+                ? filaPop('Mulita · trabajo', calTipFull.maquinaria.tipoTrabajo)
+                : null}
+            </div>
+            <p className="mt-2 border-t border-slate-100 pt-2 text-[10px] text-slate-500">
+              Clic en la franja para abrir el expediente completo.
+            </p>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }

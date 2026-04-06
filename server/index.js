@@ -1054,6 +1054,9 @@ app.post('/api/rentas', requireAuth, requireEdicionFlota, (req, res) => {
     operadorAsignado: body.operadorAsignado || '',
     refrigerado: body.refrigerado,
     maquinaria: body.maquinaria,
+    facturacionMesNatural: body.facturacionMesNatural,
+    facturacionPeriodoDesdeDia: body.facturacionPeriodoDesdeDia,
+    facturacionPeriodoHastaDia: body.facturacionPeriodoHastaDia,
   };
   try {
     const renta = createRenta(data, req.user.id);
@@ -1091,6 +1094,9 @@ app.put('/api/rentas/:id', requireAuth, requireEdicionFlota, (req, res) => {
   if (body.operadorAsignado != null) data.operadorAsignado = body.operadorAsignado;
   if (body.refrigerado != null) data.refrigerado = body.refrigerado;
   if (body.maquinaria != null) data.maquinaria = body.maquinaria;
+  if (body.facturacionMesNatural !== undefined) data.facturacionMesNatural = body.facturacionMesNatural;
+  if (body.facturacionPeriodoDesdeDia !== undefined) data.facturacionPeriodoDesdeDia = body.facturacionPeriodoDesdeDia;
+  if (body.facturacionPeriodoHastaDia !== undefined) data.facturacionPeriodoHastaDia = body.facturacionPeriodoHastaDia;
   try {
     const updated = updateRenta(req.params.id, data, req.user.id);
     res.json({ renta: updated });
