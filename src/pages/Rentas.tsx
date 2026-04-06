@@ -52,8 +52,6 @@ import { notifyRentasListChanged } from '../lib/rentasListSync';
 
 const DIAS_SEMANA = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const DIAS_SEMANA_COMPLETO = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-/** Tipos mostrados en la leyenda del calendario (colores en celdas). */
-const CALENDARIO_LEYENDA_TIPOS = ['remolque_seco', 'refrigerado', 'maquinaria', 'plataforma'] as const;
 const COLOR_POR_TIPO: Record<string, string> = {
   remolque_seco: 'bg-sky-100 text-sky-800',
   refrigerado: 'bg-cyan-100 text-cyan-800',
@@ -166,9 +164,46 @@ function obtenerSemanasDelMes(ano: number, mes: number) {
   return semanas;
 }
 
+function ymdISO(ano: number, mes: number, dia: number): string {
+  return `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+}
+
+function ultimoDiaDelMes(ano: number, mes: number): number {
+  return new Date(ano, mes, 0).getDate();
+}
+
+/** Recorte del contrato al mes del calendario (límites de “periodo mensual” natural). */
+function periodoFacturacionEnMes(
+  r: RentaCalendario,
+  ano: number,
+  mes: number,
+): { inicio: string; fin: string } | null {
+  const primerDiaMes = ymdISO(ano, mes, 1);
+  const ultimoDiaMes = ymdISO(ano, mes, ultimoDiaDelMes(ano, mes));
+  const periodoInicio = r.fechaInicio > primerDiaMes ? r.fechaInicio : primerDiaMes;
+  const periodoFin = r.fechaFin < ultimoDiaMes ? r.fechaFin : ultimoDiaMes;
+  if (periodoInicio > periodoFin) return null;
+  return { inicio: periodoInicio, fin: periodoFin };
+}
+
+/**
+ * El calendario muestra la renta solo en el primer y último día facturable de ese mes dentro
+ * del contrato (no en cada día intermedio).
+ */
 function rentaIncluyeDia(r: RentaCalendario, ano: number, mes: number, dia: number): boolean {
-  const dStr = `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
-  return r.fechaInicio <= dStr && dStr <= r.fechaFin;
+  const dStr = ymdISO(ano, mes, dia);
+  const p = periodoFacturacionEnMes(r, ano, mes);
+  if (!p) return false;
+  return dStr === p.inicio || dStr === p.fin;
+}
+
+function etiquetaAnclaCalendario(r: RentaCalendario, ano: number, mes: number, dia: number): string {
+  const dStr = ymdISO(ano, mes, dia);
+  const p = periodoFacturacionEnMes(r, ano, mes);
+  if (!p) return '';
+  if (p.inicio === p.fin) return 'Inicio y fin de periodo (este día)';
+  if (dStr === p.inicio) return 'Inicio de periodo mensual en el contrato';
+  return 'Fin de periodo mensual en el contrato';
 }
 
 const TIPOS_SERVICIO_OPT = [
@@ -273,7 +308,7 @@ export function Rentas() {
           !idsCurso.has(r.id),
       )
       .sort((a, b) => a.fechaInicio.localeCompare(b.fechaInicio));
-    return [...enCurso, ...proximasInicio].slice(0, 8);
+    return [...enCurso, ...proximasInicio];
   }, [rentas]);
 
   const rentasFiltradas = useMemo(() => {
@@ -556,8 +591,7 @@ export function Rentas() {
                 <div className="min-w-0">
                   <h2 className="text-base font-semibold leading-tight text-[#162036]">Calendario de reservaciones</h2>
                   <p className="mt-0.5 text-xs leading-snug text-slate-600">
-                    Cada día muestra las rentas cuya vigencia{' '}
-                    <strong className="font-semibold text-slate-700">incluye</strong> esa fecha (del inicio al fin del contrato). No es solo el día de entrega.
+                    El calendario marca cada renta solo en los <strong className="font-semibold text-slate-700">límites de cada mes</strong> del contrato: el primer y último día facturable de ese mes natural (dentro de la vigencia). Los días intermedios no se repiten, para contratos largos no llena todo el mes.
                   </p>
                 </div>
               </div>
@@ -665,7 +699,7 @@ export function Rentas() {
                                           type="button"
                                           onClick={() => navigate(`/rentas/${r.id}`)}
                                           className={`block w-full truncate rounded px-1 py-0.5 text-left text-[11px] font-medium leading-tight shadow-sm transition hover:brightness-95 ${COLOR_POR_TIPO[r.tipoUnidad ?? 'remolque_seco'] ?? ESTADOS[r.estado]?.color ?? 'bg-gray-100'} `}
-                                          title={`Abrir expediente · ${(r.numeroEconomico ?? '').trim() ? `${(r.numeroEconomico ?? '').trim()} · ` : ''}${r.placas} — ${r.clienteNombre}`}
+                                          title={`${etiquetaAnclaCalendario(r, ano, mes, dia!)} · Abrir expediente · ${(r.numeroEconomico ?? '').trim() ? `${(r.numeroEconomico ?? '').trim()} · ` : ''}${r.placas} — ${r.clienteNombre}`}
                                         >
                                           {(r.numeroEconomico ?? '').trim() || r.placas}
                                         </button>
@@ -693,14 +727,16 @@ export function Rentas() {
             )}
 
             <div className="mt-4 rounded-xl border border-skyline-border/90 bg-gradient-to-br from-slate-50/95 via-white to-skyline-bg/40 px-4 py-3.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Colores por tipo de unidad (ejemplos)</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Colores por tipo de unidad (mismo catálogo que en unidades)
+              </p>
               <div className="mt-1.5 flex flex-wrap gap-2">
-                {CALENDARIO_LEYENDA_TIPOS.map((t) => (
+                {TIPOS_UNIDAD_OPCIONES.map(({ v }) => (
                   <span
-                    key={t}
-                    className={`rounded-md px-2 py-1 text-[10px] font-medium shadow-sm ${COLOR_POR_TIPO[t] ?? 'bg-gray-100'}`}
+                    key={v}
+                    className={`rounded-md px-2 py-1 text-[10px] font-medium shadow-sm ${COLOR_POR_TIPO[v] ?? 'bg-gray-100'}`}
                   >
-                    {labelTipoUnidad(t)}
+                    {labelTipoUnidad(v)}
                   </span>
                 ))}
               </div>
@@ -728,7 +764,7 @@ export function Rentas() {
               <div className="min-w-0 flex-1">
                 <h2 className="text-base font-semibold leading-tight text-[#162036]">Próximas rentas</h2>
                 <p className="mt-0.5 text-xs leading-snug text-slate-600">
-                  Contratos en curso y los próximos inicios (hoy o futuros). Máx. 8.
+                  Contratos en curso y los próximos inicios (hoy o futuros). La lista se puede desplazar si hay muchas.
                 </p>
               </div>
             </div>
