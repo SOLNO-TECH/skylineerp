@@ -525,7 +525,11 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
     gpsNumero2,
     gestorFisicoMecanica,
     unidadRotulada,
+    valorComercial: valorComercialBody,
+    rentaMensual: rentaMensualBody,
   } = body;
+  const valorComercial = valorComercialBody ?? body.valor_comercial;
+  const rentaMensual = rentaMensualBody ?? body.renta_mensual;
   const numeroSerieCaja = pickNumeroSerieCaja(body);
   if (!placas || !marca || !modelo) {
     return res.status(400).json({ error: 'Placas, marca y modelo son requeridos' });
@@ -563,6 +567,8 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
         gpsNumero2,
         gestorFisicoMecanica,
         unidadRotulada,
+        valorComercial,
+        rentaMensual,
       },
       req.user.id
     );
@@ -606,7 +612,11 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
     gpsNumero2,
     gestorFisicoMecanica,
     unidadRotulada,
+    valorComercial: valorComercialBodyPut,
+    rentaMensual: rentaMensualBodyPut,
   } = body;
+  const valorComercial = valorComercialBodyPut ?? body.valor_comercial;
+  const rentaMensual = rentaMensualBodyPut ?? body.renta_mensual;
   const numeroSeriePicked = pickNumeroSerieCaja(body);
   const numeroSerieCaja = numeroSeriePicked !== undefined ? numeroSeriePicked : undefined;
   if (placas != null && existePlacas(placas, Number(id))) {
@@ -647,6 +657,8 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
         gpsNumero2,
         gestorFisicoMecanica,
         unidadRotulada,
+        valorComercial,
+        rentaMensual,
       },
       req.user.id
     );

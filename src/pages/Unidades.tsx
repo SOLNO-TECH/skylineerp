@@ -65,6 +65,8 @@ const defaultForm = {
   tipoUnidad: 'remolque_seco' as TipoUnidadCatalogo,
   gestorFisicoMecanica: '',
   unidadRotulada: 'sin_definir' as RotuladaOpcion,
+  valorComercial: '',
+  rentaMensual: '',
 };
 
 function rotuladaFormToApi(v: RotuladaOpcion): boolean | null {
@@ -83,6 +85,24 @@ function textoRotulada(v: boolean | null | undefined): string {
   if (v === true) return 'Sí';
   if (v === false) return 'No';
   return 'Sin definir';
+}
+
+function parseMontoUnidadInput(s: string): { ok: true; value: number | null } | { ok: false; message: string } {
+  const t = s
+    .trim()
+    .replace(/\$/g, '')
+    .replace(/\s/g, '')
+    .replace(/,/g, '');
+  if (!t) return { ok: true, value: null };
+  const n = Number(t);
+  if (!Number.isFinite(n)) return { ok: false, message: 'Importe inválido (usa solo números).' };
+  if (n < 0) return { ok: false, message: 'El importe no puede ser negativo.' };
+  return { ok: true, value: n };
+}
+
+function textoMontoUnidadTabla(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return '—';
+  return `$${n.toLocaleString('es-MX', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 }
 
 const EXPEDIENTE_FOTO_LABELS: Record<UnidadExpedienteFotoSlot, string> = {
@@ -403,6 +423,8 @@ export function Unidades() {
       tipoUnidad: (u.tipoUnidad ?? 'remolque_seco') as TipoUnidadCatalogo,
       gestorFisicoMecanica: (u.gestorFisicoMecanica ?? '').trim(),
       unidadRotulada: rotuladaApiToForm(u.unidadRotulada),
+      valorComercial: u.valorComercial != null ? String(u.valorComercial) : '',
+      rentaMensual: u.rentaMensual != null ? String(u.rentaMensual) : '',
     });
     setModalEditar(true);
     setSelectedId(u.id);
@@ -411,6 +433,18 @@ export function Unidades() {
 
   function handleCreateUnidad(e: React.FormEvent) {
     e.preventDefault();
+    const vc = parseMontoUnidadInput(formNueva.valorComercial);
+    const rm = parseMontoUnidadInput(formNueva.rentaMensual);
+    if (!vc.ok) {
+      setError(vc.message);
+      toast(vc.message, 'error');
+      return;
+    }
+    if (!rm.ok) {
+      setError(rm.message);
+      toast(rm.message, 'error');
+      return;
+    }
     setSavingNueva(true);
     setError(null);
     createUnidad({
@@ -429,6 +463,8 @@ export function Unidades() {
       tipoUnidad: formNueva.tipoUnidad,
       gestorFisicoMecanica: formNueva.gestorFisicoMecanica.trim(),
       unidadRotulada: rotuladaFormToApi(formNueva.unidadRotulada),
+      valorComercial: vc.value,
+      rentaMensual: rm.value,
     })
       .then(async (u) => {
         let cur = u;
@@ -466,6 +502,18 @@ export function Unidades() {
   function handleEditarUnidad(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedId) return;
+    const vc = parseMontoUnidadInput(formEditar.valorComercial);
+    const rm = parseMontoUnidadInput(formEditar.rentaMensual);
+    if (!vc.ok) {
+      setError(vc.message);
+      toast(vc.message, 'error');
+      return;
+    }
+    if (!rm.ok) {
+      setError(rm.message);
+      toast(rm.message, 'error');
+      return;
+    }
     setSavingEditar(true);
     setError(null);
     updateUnidad(selectedId, {
@@ -484,6 +532,8 @@ export function Unidades() {
       tipoUnidad: formEditar.tipoUnidad,
       gestorFisicoMecanica: formEditar.gestorFisicoMecanica.trim(),
       unidadRotulada: rotuladaFormToApi(formEditar.unidadRotulada),
+      valorComercial: vc.value,
+      rentaMensual: rm.value,
     })
       .then((u) => {
         toast('Unidad actualizada');
@@ -867,7 +917,7 @@ export function Unidades() {
             <div className={CRUD_SPINNER} />
           </div>
         ) : (
-          <table className={`${CRUD_TABLE} min-w-[1120px]`}>
+          <table className={`${CRUD_TABLE} min-w-[1280px]`}>
             <thead>
               <tr className={CRUD_THEAD_TR}>
                 <CrudTableTh className="w-[4.5rem] px-2 py-3.5 align-middle" icon="mdi:image-outline">
@@ -884,6 +934,12 @@ export function Unidades() {
                 </CrudTableTh>
                 <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 align-middle" icon="mdi:car-outline">
                   Modelo
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[6.5rem] px-2 py-3.5 align-middle" icon="mdi:cash-multiple">
+                  Valor comercial
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[6.5rem] px-2 py-3.5 align-middle" icon="mdi:calendar-month-outline">
+                  Renta / mes
                 </CrudTableTh>
                 <CrudTableTh
                   className="min-w-[7.5rem] max-w-[11rem] px-2 py-3.5 align-middle"
@@ -949,6 +1005,22 @@ export function Unidades() {
                   <td className="px-3 py-2.5 text-center align-middle">
                     <span className={`mx-auto line-clamp-2 max-w-[10rem] ${CRUD_CELDA_SEC}`} title={u.modelo}>
                       {u.modelo}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span
+                      className={`block tabular-nums ${CRUD_CELDA_SEC}`}
+                      title={textoMontoUnidadTabla(u.valorComercial)}
+                    >
+                      {textoMontoUnidadTabla(u.valorComercial)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span
+                      className={`block tabular-nums ${CRUD_CELDA_SEC}`}
+                      title={textoMontoUnidadTabla(u.rentaMensual)}
+                    >
+                      {textoMontoUnidadTabla(u.rentaMensual)}
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-center align-middle">
@@ -1045,7 +1117,7 @@ export function Unidades() {
               })}
               {filtered.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-gray-500">
+                  <td colSpan={12} className="px-4 py-10 text-center text-sm text-gray-500">
                     {unidades.length === 0
                       ? 'No hay unidades. Haz clic en "Nueva unidad" para agregar la primera.'
                       : 'No hay unidades con esos filtros.'}
@@ -1127,6 +1199,30 @@ export function Unidades() {
                   ))}
                 </select>
               </label>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Valor comercial (MXN)
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formNueva.valorComercial}
+                    onChange={(e) => setFormNueva((f) => ({ ...f, valorComercial: e.target.value }))}
+                    placeholder="Opcional, ej. 450000"
+                    className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Renta mensual (MXN)
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formNueva.rentaMensual}
+                    onChange={(e) => setFormNueva((f) => ({ ...f, rentaMensual: e.target.value }))}
+                    placeholder="Opcional, ej. 18500"
+                    className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  />
+                </label>
+              </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                 Estatus
                 <select
@@ -1397,6 +1493,30 @@ export function Unidades() {
                   ))}
                 </select>
               </label>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Valor comercial (MXN)
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formEditar.valorComercial}
+                    onChange={(e) => setFormEditar((f) => ({ ...f, valorComercial: e.target.value }))}
+                    placeholder="Opcional"
+                    className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Renta mensual (MXN)
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formEditar.rentaMensual}
+                    onChange={(e) => setFormEditar((f) => ({ ...f, rentaMensual: e.target.value }))}
+                    placeholder="Opcional"
+                    className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                  />
+                </label>
+              </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Placas *
                 <input
@@ -1714,6 +1834,12 @@ export function Unidades() {
                     </span>
                     <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                       Serie: {textoSerieCrud(selected.numeroSerieCaja)}
+                    </span>
+                    <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
+                      Valor com.: {textoMontoUnidadTabla(selected.valorComercial)}
+                    </span>
+                    <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
+                      Renta / mes: {textoMontoUnidadTabla(selected.rentaMensual)}
                     </span>
                     <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                       GPS: {selected.tieneGps ? 'Sí' : 'No'}
@@ -2112,6 +2238,10 @@ export function Unidades() {
                   : `${previewUnidadNueva.placas} · ${previewUnidadNueva.marca} ${previewUnidadNueva.modelo}`}
               </p>
               <p className="mt-1 text-sm text-gray-600">Serie: {textoSerieCrud(previewUnidadNueva.numeroSerieCaja)}</p>
+              <p className="mt-1 text-sm text-gray-600">
+                Valor comercial: {textoMontoUnidadTabla(previewUnidadNueva.valorComercial)} · Renta mensual:{' '}
+                {textoMontoUnidadTabla(previewUnidadNueva.rentaMensual)}
+              </p>
               <p className="mt-1 text-sm text-gray-600">
                 GPS: {previewUnidadNueva.tieneGps ? 'Sí' : 'No'}
                 {previewUnidadNueva.tieneGps

@@ -638,6 +638,10 @@ export type UnidadRow = {
   tarjetaCirculacionRuta?: string;
   /** Si la unidad está rotulada con marca; `null` = sin definir. */
   unidadRotulada?: boolean | null;
+  /** Valor comercial de la unidad (MXN); `null` = no capturado. */
+  valorComercial?: number | null;
+  /** Renta mensual de referencia (MXN); `null` = no capturado. */
+  rentaMensual?: number | null;
   documentos: UnidadDoc[];
   actividad: UnidadAct[];
   imagenes?: UnidadImg[];
@@ -678,6 +682,8 @@ export async function createUnidad(p: {
   horasMotor?: number;
   gestorFisicoMecanica?: string;
   unidadRotulada?: boolean | null;
+  valorComercial?: number | null;
+  rentaMensual?: number | null;
 }): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades`, {
     method: 'POST',
@@ -710,6 +716,8 @@ export async function updateUnidad(
     horasMotor: number;
     gestorFisicoMecanica: string;
     unidadRotulada: boolean | null;
+    valorComercial: number | null;
+    rentaMensual: number | null;
   }>
 ): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades/${id}`, {
