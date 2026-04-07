@@ -262,10 +262,51 @@ function ensureUnidadesMoneyColumns() {
   }
 }
 
+/** Placas: motivo si pendiente_placas y tipo federal/local (idempotente). */
+let unidadesPlacasMetaEnsured = false;
+function ensureUnidadesPlacasMetadataColumns() {
+  if (unidadesPlacasMetaEnsured) return;
+  try {
+    const cols = db.prepare('PRAGMA table_info(unidades)').all().map((r) => r.name);
+    if (cols.length === 0) return;
+    if (!cols.includes('pendiente_placas_motivo')) {
+      db.exec("ALTER TABLE unidades ADD COLUMN pendiente_placas_motivo TEXT");
+    }
+    if (!cols.includes('placa_federal')) db.exec('ALTER TABLE unidades ADD COLUMN placa_federal INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('placa_local')) db.exec('ALTER TABLE unidades ADD COLUMN placa_local INTEGER NOT NULL DEFAULT 0');
+    unidadesPlacasMetaEnsured = true;
+  } catch (e) {
+    console.warn('Columnas pendiente_placas_motivo / placa_federal / placa_local:', e?.message);
+  }
+}
+
+function ensureUnidadesReadWriteColumns() {
+  ensureUnidadesMoneyColumns();
+  ensureUnidadesPlacasMetadataColumns();
+}
+
+function normalizePendientePlacasMotivo(v) {
+  if (v === null || v === undefined) return null;
+  const t = String(v).trim();
+  if (!t) return null;
+  return PENDIENTE_PLACAS_MOTIVOS.includes(t) ? t : null;
+}
+
+function coercePlacaBool(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v === 1;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    return s === '1' || s === 'true' || s === 'si' || s === 'sí';
+  }
+  return false;
+}
+
 /* ─── Migración Unidades: tipo y mantenimiento ─── */
 function migrarUnidades() {
   try {
-    ensureUnidadesMoneyColumns();
+    ensureUnidadesReadWriteColumns();
     const cols = db.prepare("PRAGMA table_info(unidades)").all().map(r => r.name);
     if (!cols.includes('tipo_unidad')) db.exec("ALTER TABLE unidades ADD COLUMN tipo_unidad TEXT DEFAULT 'remolque_seco'");
     if (!cols.includes('estado_mantenimiento')) db.exec("ALTER TABLE unidades ADD COLUMN estado_mantenimiento TEXT DEFAULT 'disponible'");
@@ -1325,6 +1366,7 @@ export function existeUsuarioPorEmail(email, excludeId = null) {
 const ESTADOS_UNIDAD = ['Disponible', 'En Renta'];
 const SUBESTADOS_DISPONIBLE = ['disponible', 'taller', 'almacen_exclusivo', 'pendiente_placas'];
 const UBICACIONES_DISPONIBLE = ['lote', 'patio'];
+const PENDIENTE_PLACAS_MOTIVOS = ['baja_placas', 'pendiente_importar'];
 
 export function initUnidades() {
   db.exec(`
@@ -1408,7 +1450,7 @@ export function initUnidades() {
 }
 
 export function getAllUnidades() {
-  ensureUnidadesMoneyColumns();
+  ensureUnidadesReadWriteColumns();
   const rows = db.prepare(
     `SELECT id, placas, COALESCE(numero_economico, '') as numero_economico, marca, modelo, estatus, numero_serie_caja,
             COALESCE(tiene_gps, 0) as tiene_gps, COALESCE(gps_numero_1, '') as gps_numero_1, COALESCE(gps_numero_2, '') as gps_numero_2,
@@ -1424,6 +1466,9 @@ export function getAllUnidades() {
             unidad_rotulada,
             valor_comercial,
             renta_mensual,
+            pendiente_placas_motivo,
+            COALESCE(placa_federal, 0) as placa_federal,
+            COALESCE(placa_local, 0) as placa_local,
             (
               SELECT r.cliente_nombre
               FROM rentas r
@@ -1473,6 +1518,9 @@ export function getAllUnidades() {
       u.unidad_rotulada === null || u.unidad_rotulada === undefined ? null : Number(u.unidad_rotulada) === 1,
     valorComercial: u.valor_comercial != null ? Number(u.valor_comercial) : null,
     rentaMensual: u.renta_mensual != null ? Number(u.renta_mensual) : null,
+    pendientePlacasMotivo: normalizePendientePlacasMotivo(u.pendiente_placas_motivo),
+    placaFederal: Number(u.placa_federal) === 1,
+    placaLocal: Number(u.placa_local) === 1,
     documentos: docs.filter(d => d.unidad_id === u.id).map(d => ({
       id: String(d.id),
       nombre: d.nombre,
@@ -1498,7 +1546,7 @@ export function getAllUnidades() {
 }
 
 export function getUnidadById(id) {
-  ensureUnidadesMoneyColumns();
+  ensureUnidadesReadWriteColumns();
   const u = db.prepare(
     `SELECT id, placas, COALESCE(numero_economico, '') as numero_economico, marca, modelo, estatus, numero_serie_caja,
             COALESCE(tiene_gps, 0) as tiene_gps, COALESCE(gps_numero_1, '') as gps_numero_1, COALESCE(gps_numero_2, '') as gps_numero_2,
@@ -1514,6 +1562,9 @@ export function getUnidadById(id) {
             unidad_rotulada,
             valor_comercial,
             renta_mensual,
+            pendiente_placas_motivo,
+            COALESCE(placa_federal, 0) as placa_federal,
+            COALESCE(placa_local, 0) as placa_local,
             (
               SELECT r.cliente_nombre
               FROM rentas r
@@ -1555,6 +1606,9 @@ export function getUnidadById(id) {
       u.unidad_rotulada === null || u.unidad_rotulada === undefined ? null : Number(u.unidad_rotulada) === 1,
     valorComercial: u.valor_comercial != null ? Number(u.valor_comercial) : null,
     rentaMensual: u.renta_mensual != null ? Number(u.renta_mensual) : null,
+    pendientePlacasMotivo: normalizePendientePlacasMotivo(u.pendiente_placas_motivo),
+    placaFederal: Number(u.placa_federal) === 1,
+    placaLocal: Number(u.placa_local) === 1,
     documentos: docs.map(d => ({ id: String(d.id), nombre: d.nombre, tipo: d.tipo, ruta: d.ruta || '', fechaSubida: d.fecha_subida })),
     actividad: acts.map(a => ({ id: String(a.id), accion: a.accion, detalle: a.detalle, fecha: a.fecha, icon: a.icon || 'mdi:information' })),
     imagenes: imgs.map(i => ({
@@ -1684,7 +1738,7 @@ function coerceOptionalMoneyUnidad(v) {
 }
 
 export function createUnidad(data, usuarioId = null) {
-  ensureUnidadesMoneyColumns();
+  ensureUnidadesReadWriteColumns();
   const {
     placas,
     numeroEconomico,
@@ -1706,6 +1760,9 @@ export function createUnidad(data, usuarioId = null) {
     unidadRotulada = null,
     valorComercial,
     rentaMensual,
+    pendientePlacasMotivo,
+    placaFederal,
+    placaLocal,
   } = data;
   if (!placas || !marca || !modelo) return null;
   const ne = String(numeroEconomico ?? '').trim();
@@ -1725,8 +1782,15 @@ export function createUnidad(data, usuarioId = null) {
     unidadRotulada === null || unidadRotulada === undefined ? null : unidadRotulada ? 1 : 0;
   const vc = coerceOptionalMoneyUnidad(valorComercial);
   const rm = coerceOptionalMoneyUnidad(rentaMensual);
+  const motivoSql =
+    subestatus === 'pendiente_placas'
+      ? normalizePendientePlacasMotivo(pendientePlacasMotivo ?? data.pendiente_placas_motivo)
+      : null;
+  if (subestatus === 'pendiente_placas' && !motivoSql) return null;
+  const pf = coercePlacaBool(placaFederal ?? data.placa_federal);
+  const plBool = coercePlacaBool(placaLocal ?? data.placa_local);
   const run = db.prepare(
-    'INSERT INTO unidades (placas, numero_economico, marca, modelo, estatus, numero_serie_caja, tiene_gps, gps_numero_1, gps_numero_2, subestatus_disponible, ubicacion_disponible, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor, gestor_fisico_mecanica, unidad_rotulada, valor_comercial, renta_mensual) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO unidades (placas, numero_economico, marca, modelo, estatus, numero_serie_caja, tiene_gps, gps_numero_1, gps_numero_2, subestatus_disponible, ubicacion_disponible, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor, gestor_fisico_mecanica, unidad_rotulada, valor_comercial, renta_mensual, pendiente_placas_motivo, placa_federal, placa_local) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const r = run.run(
     String(placas).trim(),
@@ -1748,7 +1812,10 @@ export function createUnidad(data, usuarioId = null) {
     String(gestorFisicoMecanica || '').trim(),
     rotSql,
     vc,
-    rm
+    rm,
+    motivoSql,
+    pf ? 1 : 0,
+    plBool ? 1 : 0
   );
   const id = r.lastInsertRowid;
   logUnidadActividadRow(
@@ -1762,8 +1829,12 @@ export function createUnidad(data, usuarioId = null) {
 }
 
 export function updateUnidadDb(id, data, usuarioId = null) {
-  ensureUnidadesMoneyColumns();
-  const u = db.prepare('SELECT id, placas FROM unidades WHERE id = ? AND activo = 1').get(Number(id));
+  ensureUnidadesReadWriteColumns();
+  const u = db
+    .prepare(
+      'SELECT id, placas, subestatus_disponible, pendiente_placas_motivo FROM unidades WHERE id = ? AND activo = 1'
+    )
+    .get(Number(id));
   if (!u) return null;
   const updates = [];
   const values = [];
@@ -1789,6 +1860,9 @@ export function updateUnidadDb(id, data, usuarioId = null) {
     unidadRotulada,
     valorComercial,
     rentaMensual,
+    pendientePlacasMotivo,
+    placaFederal,
+    placaLocal,
   } = data;
   if (numeroEconomico != null) {
     const ne = String(numeroEconomico).trim();
@@ -1820,7 +1894,20 @@ export function updateUnidadDb(id, data, usuarioId = null) {
     if (gpsNumero1 != null) { updates.push('gps_numero_1 = ?'); values.push(String(gpsNumero1 || '').trim()); }
     if (gpsNumero2 != null) { updates.push('gps_numero_2 = ?'); values.push(String(gpsNumero2 || '').trim()); }
   }
-  if (subestatusDisponible != null && SUBESTADOS_DISPONIBLE.includes(subestatusDisponible)) { updates.push('subestatus_disponible = ?'); values.push(subestatusDisponible); }
+  if (subestatusDisponible != null && SUBESTADOS_DISPONIBLE.includes(subestatusDisponible)) {
+    if (subestatusDisponible === 'pendiente_placas') {
+      const m =
+        pendientePlacasMotivo !== undefined
+          ? normalizePendientePlacasMotivo(pendientePlacasMotivo)
+          : normalizePendientePlacasMotivo(u.pendiente_placas_motivo);
+      if (!m) return null;
+    }
+    updates.push('subestatus_disponible = ?');
+    values.push(subestatusDisponible);
+    if (subestatusDisponible !== 'pendiente_placas') {
+      updates.push('pendiente_placas_motivo = NULL');
+    }
+  }
   if (ubicacionDisponible != null && UBICACIONES_DISPONIBLE.includes(ubicacionDisponible)) { updates.push('ubicacion_disponible = ?'); values.push(ubicacionDisponible); }
   if (kilometraje != null) { updates.push('kilometraje = ?'); values.push(Number(kilometraje) || 0); }
   if (combustiblePct != null) { updates.push('combustible_pct = ?'); values.push(Math.max(0, Math.min(100, Number(combustiblePct) || 0))); }
@@ -1848,6 +1935,23 @@ export function updateUnidadDb(id, data, usuarioId = null) {
     updates.push('renta_mensual = ?');
     values.push(coerceOptionalMoneyUnidad(rentaMensual));
   }
+  if (pendientePlacasMotivo !== undefined) {
+    const willBePendiente =
+      subestatusDisponible === 'pendiente_placas' ||
+      (subestatusDisponible == null && u.subestatus_disponible === 'pendiente_placas');
+    if (willBePendiente) {
+      updates.push('pendiente_placas_motivo = ?');
+      values.push(normalizePendientePlacasMotivo(pendientePlacasMotivo));
+    }
+  }
+  if (placaFederal !== undefined) {
+    updates.push('placa_federal = ?');
+    values.push(coercePlacaBool(placaFederal) ? 1 : 0);
+  }
+  if (placaLocal !== undefined) {
+    updates.push('placa_local = ?');
+    values.push(coercePlacaBool(placaLocal) ? 1 : 0);
+  }
   if (updates.length === 0) return getUnidadById(id);
   updates.push("actualizado_en = datetime('now')");
   values.push(id);
@@ -1873,6 +1977,9 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (Object.prototype.hasOwnProperty.call(data, 'unidadRotulada')) campos.push('unidad_rotulada');
   if (valorComercial !== undefined) campos.push('valor_comercial');
   if (rentaMensual !== undefined) campos.push('renta_mensual');
+  if (pendientePlacasMotivo !== undefined) campos.push('pendiente_placas_motivo');
+  if (placaFederal !== undefined) campos.push('placa_federal');
+  if (placaLocal !== undefined) campos.push('placa_local');
   if (campos.length > 0) {
     logUnidadActividadRow(
       id,

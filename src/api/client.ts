@@ -642,6 +642,10 @@ export type UnidadRow = {
   valorComercial?: number | null;
   /** Renta mensual de referencia (MXN); `null` = no capturado. */
   rentaMensual?: number | null;
+  /** Si `subestatusDisponible` es pendiente de placas: baja o importación. */
+  pendientePlacasMotivo?: 'baja_placas' | 'pendiente_importar' | null;
+  placaFederal?: boolean;
+  placaLocal?: boolean;
   documentos: UnidadDoc[];
   actividad: UnidadAct[];
   imagenes?: UnidadImg[];
@@ -684,6 +688,9 @@ export async function createUnidad(p: {
   unidadRotulada?: boolean | null;
   valorComercial?: number | null;
   rentaMensual?: number | null;
+  pendientePlacasMotivo?: 'baja_placas' | 'pendiente_importar' | null;
+  placaFederal?: boolean;
+  placaLocal?: boolean;
 }): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades`, {
     method: 'POST',
@@ -718,6 +725,9 @@ export async function updateUnidad(
     unidadRotulada: boolean | null;
     valorComercial: number | null;
     rentaMensual: number | null;
+    pendientePlacasMotivo: 'baja_placas' | 'pendiente_importar' | null;
+    placaFederal: boolean;
+    placaLocal: boolean;
   }>
 ): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades/${id}`, {

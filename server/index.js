@@ -527,9 +527,15 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
     unidadRotulada,
     valorComercial: valorComercialBody,
     rentaMensual: rentaMensualBody,
+    pendientePlacasMotivo: pendientePlacasMotivoBody,
+    placaFederal: placaFederalBody,
+    placaLocal: placaLocalBody,
   } = body;
   const valorComercial = valorComercialBody ?? body.valor_comercial;
   const rentaMensual = rentaMensualBody ?? body.renta_mensual;
+  const pendientePlacasMotivo = pendientePlacasMotivoBody ?? body.pendiente_placas_motivo;
+  const placaFederal = placaFederalBody ?? body.placa_federal;
+  const placaLocal = placaLocalBody ?? body.placa_local;
   const numeroSerieCaja = pickNumeroSerieCaja(body);
   if (!placas || !marca || !modelo) {
     return res.status(400).json({ error: 'Placas, marca y modelo son requeridos' });
@@ -545,6 +551,16 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
   }
   if (existeNumeroEconomico(String(numeroEconomico).trim())) {
     return res.status(400).json({ error: 'Ya existe una unidad con ese número económico' });
+  }
+  const subPost = String(subestatusDisponible || 'disponible').trim();
+  if (subPost === 'pendiente_placas') {
+    const m = String(pendientePlacasMotivo ?? '').trim();
+    if (m !== 'baja_placas' && m !== 'pendiente_importar') {
+      return res.status(400).json({
+        error:
+          'Con subestatus «Pendiente de placas» debes indicar si es baja de placas o pendiente por importar.',
+      });
+    }
   }
   try {
     const unidad = createUnidad(
@@ -569,6 +585,9 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
         unidadRotulada,
         valorComercial,
         rentaMensual,
+        pendientePlacasMotivo,
+        placaFederal,
+        placaLocal,
       },
       req.user.id
     );
@@ -614,9 +633,15 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
     unidadRotulada,
     valorComercial: valorComercialBodyPut,
     rentaMensual: rentaMensualBodyPut,
+    pendientePlacasMotivo: pendientePlacasMotivoBodyPut,
+    placaFederal: placaFederalBodyPut,
+    placaLocal: placaLocalBodyPut,
   } = body;
   const valorComercial = valorComercialBodyPut ?? body.valor_comercial;
   const rentaMensual = rentaMensualBodyPut ?? body.renta_mensual;
+  const pendientePlacasMotivo = pendientePlacasMotivoBodyPut ?? body.pendiente_placas_motivo;
+  const placaFederal = placaFederalBodyPut ?? body.placa_federal;
+  const placaLocal = placaLocalBodyPut ?? body.placa_local;
   const numeroSeriePicked = pickNumeroSerieCaja(body);
   const numeroSerieCaja = numeroSeriePicked !== undefined ? numeroSeriePicked : undefined;
   if (placas != null && existePlacas(placas, Number(id))) {
@@ -659,6 +684,9 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
         unidadRotulada,
         valorComercial,
         rentaMensual,
+        pendientePlacasMotivo,
+        placaFederal,
+        placaLocal,
       },
       req.user.id
     );

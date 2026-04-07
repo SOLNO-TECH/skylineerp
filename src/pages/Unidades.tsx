@@ -48,6 +48,7 @@ type UbicacionDisponible = 'lote' | 'patio';
 
 type DocTipo = 'Seguro' | 'Verificación' | 'Tarjeta' | 'Otro';
 type RotuladaOpcion = 'sin_definir' | 'si' | 'no';
+type PendientePlacasMotivo = 'baja_placas' | 'pendiente_importar';
 
 const defaultForm = {
   placas: '',
@@ -67,6 +68,9 @@ const defaultForm = {
   unidadRotulada: 'sin_definir' as RotuladaOpcion,
   valorComercial: '',
   rentaMensual: '',
+  pendientePlacasMotivo: '' as '' | PendientePlacasMotivo,
+  placaFederal: false,
+  placaLocal: false,
 };
 
 function rotuladaFormToApi(v: RotuladaOpcion): boolean | null {
@@ -129,6 +133,114 @@ const UBICACION_LABEL: Record<UbicacionDisponible, string> = {
   lote: 'Lote',
   patio: 'Patio',
 };
+
+const PENDIENTE_PLACAS_MOTIVO_LABEL: Record<PendientePlacasMotivo, string> = {
+  baja_placas: 'Baja de placas',
+  pendiente_importar: 'Pendiente por importar',
+};
+
+function textoTipoPlacaTabla(u: Pick<UnidadRow, 'placaFederal' | 'placaLocal'>): string {
+  const f = !!u.placaFederal;
+  const l = !!u.placaLocal;
+  if (f && l) return 'Fed. · Loc.';
+  if (f) return 'Federal';
+  if (l) return 'Local';
+  return '—';
+}
+
+function TipoPlacaSelector({
+  placaFederal,
+  placaLocal,
+  onChange,
+}: {
+  placaFederal: boolean;
+  placaLocal: boolean;
+  onChange: (next: { placaFederal: boolean; placaLocal: boolean }) => void;
+}) {
+  const chipCls = (active: boolean) =>
+    `flex flex-1 cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm font-medium transition-all ${
+      active
+        ? 'border-skyline-blue bg-skyline-blue/10 text-[#24478a] shadow-sm ring-1 ring-skyline-blue/20'
+        : 'border-slate-200/90 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50/80'
+    }`;
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200/90 bg-gradient-to-br from-slate-50/90 via-white to-skyline-blue/[0.04] p-3 shadow-sm shadow-slate-900/[0.02]">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tipo de placa</p>
+      <p className="mt-0.5 text-[11px] text-slate-500">Marcación federal y/o local según aplique.</p>
+      <div className="mt-3 flex flex-col gap-2.5 sm:flex-row">
+        <label className={chipCls(placaFederal)}>
+          <input
+            type="checkbox"
+            checked={placaFederal}
+            onChange={(e) => onChange({ placaFederal: e.target.checked, placaLocal })}
+            className="size-4 shrink-0 rounded border-slate-300 text-skyline-blue focus:ring-skyline-blue"
+          />
+          <Icon icon="mdi:road-variant" className="size-5 shrink-0 text-skyline-blue/80" aria-hidden />
+          <span>Federal</span>
+        </label>
+        <label className={chipCls(placaLocal)}>
+          <input
+            type="checkbox"
+            checked={placaLocal}
+            onChange={(e) => onChange({ placaFederal, placaLocal: e.target.checked })}
+            className="size-4 shrink-0 rounded border-slate-300 text-skyline-blue focus:ring-skyline-blue"
+          />
+          <Icon icon="mdi:map-marker-radius" className="size-5 shrink-0 text-skyline-blue/80" aria-hidden />
+          <span>Local / estatal</span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function PendientePlacasMotivoSelector({
+  value,
+  onChange,
+}: {
+  value: '' | PendientePlacasMotivo;
+  onChange: (v: PendientePlacasMotivo) => void;
+}) {
+  const options: { id: PendientePlacasMotivo; icon: string; hint: string }[] = [
+    { id: 'baja_placas', icon: 'mdi:card-off-outline', hint: 'Trámite de baja ante autoridad' },
+    { id: 'pendiente_importar', icon: 'mdi:ferry', hint: 'Unidad o placas en proceso de importación' },
+  ];
+  return (
+    <div className="rounded-xl border border-amber-200/70 bg-gradient-to-br from-amber-50/60 to-white p-4 shadow-sm shadow-amber-900/[0.04] md:col-span-2">
+      <div className="flex items-start gap-2">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-100/90 text-amber-800">
+          <Icon icon="mdi:alert-decagram-outline" className="size-5" aria-hidden />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-gray-900">Motivo de pendiente de placas</p>
+          <p className="mt-0.5 text-xs text-gray-600">Requerido mientras el subestatus sea «Pendiente de placas».</p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {options.map((o) => {
+          const sel = value === o.id;
+          return (
+            <button
+              key={o.id}
+              type="button"
+              onClick={() => onChange(o.id)}
+              className={`flex w-full flex-col items-start rounded-xl border px-4 py-3 text-left transition-all ${
+                sel
+                  ? 'border-skyline-blue bg-skyline-blue/10 ring-2 ring-skyline-blue/25'
+                  : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/80'
+              }`}
+            >
+              <span className="flex items-center gap-2 font-semibold text-gray-900">
+                <Icon icon={o.icon} className={`size-5 ${sel ? 'text-skyline-blue' : 'text-slate-500'}`} aria-hidden />
+                {PENDIENTE_PLACAS_MOTIVO_LABEL[o.id]}
+              </span>
+              <span className="mt-1 text-xs text-gray-500">{o.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /** Valores generados cuando en BD la serie quedó vacía (no son un formato de negocio). */
 const SERIE_PLACEHOLDER_RE = /^(SIN-SERIE|PENDIENTE)-\d+$/;
@@ -425,6 +537,12 @@ export function Unidades() {
       unidadRotulada: rotuladaApiToForm(u.unidadRotulada),
       valorComercial: u.valorComercial != null ? String(u.valorComercial) : '',
       rentaMensual: u.rentaMensual != null ? String(u.rentaMensual) : '',
+      pendientePlacasMotivo:
+        u.pendientePlacasMotivo === 'baja_placas' || u.pendientePlacasMotivo === 'pendiente_importar'
+          ? u.pendientePlacasMotivo
+          : '',
+      placaFederal: !!u.placaFederal,
+      placaLocal: !!u.placaLocal,
     });
     setModalEditar(true);
     setSelectedId(u.id);
@@ -443,6 +561,16 @@ export function Unidades() {
     if (!rm.ok) {
       setError(rm.message);
       toast(rm.message, 'error');
+      return;
+    }
+    if (
+      formNueva.estatus === 'Disponible' &&
+      formNueva.subestatusDisponible === 'pendiente_placas' &&
+      !formNueva.pendientePlacasMotivo
+    ) {
+      const msg = 'Indica el motivo de pendiente de placas (baja o pendiente por importar).';
+      setError(msg);
+      toast(msg, 'error');
       return;
     }
     setSavingNueva(true);
@@ -465,6 +593,12 @@ export function Unidades() {
       unidadRotulada: rotuladaFormToApi(formNueva.unidadRotulada),
       valorComercial: vc.value,
       rentaMensual: rm.value,
+      pendientePlacasMotivo:
+        formNueva.estatus === 'Disponible' && formNueva.subestatusDisponible === 'pendiente_placas'
+          ? formNueva.pendientePlacasMotivo || null
+          : null,
+      placaFederal: formNueva.placaFederal,
+      placaLocal: formNueva.placaLocal,
     })
       .then(async (u) => {
         let cur = u;
@@ -514,6 +648,16 @@ export function Unidades() {
       toast(rm.message, 'error');
       return;
     }
+    if (
+      formEditar.estatus === 'Disponible' &&
+      formEditar.subestatusDisponible === 'pendiente_placas' &&
+      !formEditar.pendientePlacasMotivo
+    ) {
+      const msg = 'Indica el motivo de pendiente de placas (baja o pendiente por importar).';
+      setError(msg);
+      toast(msg, 'error');
+      return;
+    }
     setSavingEditar(true);
     setError(null);
     updateUnidad(selectedId, {
@@ -534,6 +678,12 @@ export function Unidades() {
       unidadRotulada: rotuladaFormToApi(formEditar.unidadRotulada),
       valorComercial: vc.value,
       rentaMensual: rm.value,
+      pendientePlacasMotivo:
+        formEditar.estatus === 'Disponible' && formEditar.subestatusDisponible === 'pendiente_placas'
+          ? formEditar.pendientePlacasMotivo || null
+          : null,
+      placaFederal: formEditar.placaFederal,
+      placaLocal: formEditar.placaLocal,
     })
       .then((u) => {
         toast('Unidad actualizada');
@@ -917,7 +1067,7 @@ export function Unidades() {
             <div className={CRUD_SPINNER} />
           </div>
         ) : (
-          <table className={`${CRUD_TABLE} min-w-[1280px]`}>
+          <table className={`${CRUD_TABLE} min-w-[1380px]`}>
             <thead>
               <tr className={CRUD_THEAD_TR}>
                 <CrudTableTh className="w-[4.5rem] px-2 py-3.5 align-middle" icon="mdi:image-outline">
@@ -928,6 +1078,9 @@ export function Unidades() {
                 </CrudTableTh>
                 <CrudTableTh className="w-[6.25rem] px-2 py-3.5 align-middle" icon="mdi:card-outline">
                   Placas
+                </CrudTableTh>
+                <CrudTableTh className="min-w-[6.25rem] px-2 py-3.5 align-middle" icon="mdi:shape-outline">
+                  Tipo placa
                 </CrudTableTh>
                 <CrudTableTh className="min-w-[5.5rem] px-2 py-3.5 align-middle" icon="mdi:domain">
                   Marca
@@ -996,6 +1149,14 @@ export function Unidades() {
                   </td>
                   <td className="px-3 py-2.5 text-center align-middle">
                     <span className={`block w-full ${CRUD_CELDA_SEC}`}>{u.placas}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center align-middle">
+                    <span
+                      className={`inline-flex max-w-[7rem] justify-center text-[11px] font-medium leading-tight text-slate-600 ${CRUD_CELDA_SEC}`}
+                      title={textoTipoPlacaTabla(u)}
+                    >
+                      {textoTipoPlacaTabla(u)}
+                    </span>
                   </td>
                   <td className="px-3 py-2.5 text-center align-middle">
                     <span className={`mx-auto line-clamp-2 max-w-[10rem] ${CRUD_CELDA_SEC}`} title={u.marca}>
@@ -1117,7 +1278,7 @@ export function Unidades() {
               })}
               {filtered.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={12} className="px-4 py-10 text-center text-sm text-gray-500">
+                  <td colSpan={13} className="px-4 py-10 text-center text-sm text-gray-500">
                     {unidades.length === 0
                       ? 'No hay unidades. Haz clic en "Nueva unidad" para agregar la primera.'
                       : 'No hay unidades con esos filtros.'}
@@ -1138,17 +1299,24 @@ export function Unidades() {
           >
             <h2 className="mb-4 text-lg font-semibold text-gray-900">Nueva unidad</h2>
             <form onSubmit={handleCreateUnidad} className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
-                Placas *
-                <input
-                  type="text"
-                  value={formNueva.placas}
-                  onChange={(e) => setFormNueva((f) => ({ ...f, placas: e.target.value.toUpperCase() }))}
-                  placeholder="ABC-12-34"
-                  className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                  required
+              <div className="md:col-span-2">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Placas *
+                  <input
+                    type="text"
+                    value={formNueva.placas}
+                    onChange={(e) => setFormNueva((f) => ({ ...f, placas: e.target.value.toUpperCase() }))}
+                    placeholder="ABC-12-34"
+                    className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                    required
+                  />
+                </label>
+                <TipoPlacaSelector
+                  placaFederal={formNueva.placaFederal}
+                  placaLocal={formNueva.placaLocal}
+                  onChange={(next) => setFormNueva((f) => ({ ...f, ...next }))}
                 />
-              </label>
+              </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Número económico *
                 <input
@@ -1292,32 +1460,47 @@ export function Unidades() {
                 ) : null}
               </div>
               {formNueva.estatus === 'Disponible' && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
-                    Subestatus disponible
-                    <select
-                      value={formNueva.subestatusDisponible}
-                      onChange={(e) => setFormNueva((f) => ({ ...f, subestatusDisponible: e.target.value as SubestatusDisponible }))}
-                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                    >
-                      {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
-                        <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
-                    Ubicación
-                    <select
-                      value={formNueva.ubicacionDisponible}
-                      onChange={(e) => setFormNueva((f) => ({ ...f, ubicacionDisponible: e.target.value as UbicacionDisponible }))}
-                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                    >
-                      {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
-                        <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
+                <>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                      Subestatus disponible
+                      <select
+                        value={formNueva.subestatusDisponible}
+                        onChange={(e) => {
+                          const v = e.target.value as SubestatusDisponible;
+                          setFormNueva((f) => ({
+                            ...f,
+                            subestatusDisponible: v,
+                            pendientePlacasMotivo: v === 'pendiente_placas' ? f.pendientePlacasMotivo : '',
+                          }));
+                        }}
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      >
+                        {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
+                          <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                      Ubicación
+                      <select
+                        value={formNueva.ubicacionDisponible}
+                        onChange={(e) => setFormNueva((f) => ({ ...f, ubicacionDisponible: e.target.value as UbicacionDisponible }))}
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      >
+                        {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
+                          <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {formNueva.subestatusDisponible === 'pendiente_placas' ? (
+                    <PendientePlacasMotivoSelector
+                      value={formNueva.pendientePlacasMotivo}
+                      onChange={(v) => setFormNueva((f) => ({ ...f, pendientePlacasMotivo: v }))}
+                    />
+                  ) : null}
+                </>
               )}
               <div className="rounded-md border border-skyline-border bg-skyline-bg/40 p-4 md:col-span-2">
                 <h3 className="text-sm font-semibold text-gray-900">Físico-mecánica, tarjeta de circulación y rotulación</h3>
@@ -1517,16 +1700,23 @@ export function Unidades() {
                   />
                 </label>
               </div>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
-                Placas *
-                <input
-                  type="text"
-                  value={formEditar.placas}
-                  onChange={(e) => setFormEditar((f) => ({ ...f, placas: e.target.value.toUpperCase() }))}
-                  className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                  required
+              <div className="md:col-span-2">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                  Placas *
+                  <input
+                    type="text"
+                    value={formEditar.placas}
+                    onChange={(e) => setFormEditar((f) => ({ ...f, placas: e.target.value.toUpperCase() }))}
+                    className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                    required
+                  />
+                </label>
+                <TipoPlacaSelector
+                  placaFederal={formEditar.placaFederal}
+                  placaLocal={formEditar.placaLocal}
+                  onChange={(next) => setFormEditar((f) => ({ ...f, ...next }))}
                 />
-              </label>
+              </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700 md:col-span-2">
                 Número económico *
                 <input
@@ -1627,32 +1817,47 @@ export function Unidades() {
                 ) : null}
               </div>
               {formEditar.estatus === 'Disponible' && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
-                    Subestatus disponible
-                    <select
-                      value={formEditar.subestatusDisponible}
-                      onChange={(e) => setFormEditar((f) => ({ ...f, subestatusDisponible: e.target.value as SubestatusDisponible }))}
-                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                    >
-                      {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
-                        <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
-                    Ubicación
-                    <select
-                      value={formEditar.ubicacionDisponible}
-                      onChange={(e) => setFormEditar((f) => ({ ...f, ubicacionDisponible: e.target.value as UbicacionDisponible }))}
-                      className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                    >
-                      {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
-                        <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
+                <>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:col-span-2">
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                      Subestatus disponible
+                      <select
+                        value={formEditar.subestatusDisponible}
+                        onChange={(e) => {
+                          const v = e.target.value as SubestatusDisponible;
+                          setFormEditar((f) => ({
+                            ...f,
+                            subestatusDisponible: v,
+                            pendientePlacasMotivo: v === 'pendiente_placas' ? f.pendientePlacasMotivo : '',
+                          }));
+                        }}
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      >
+                        {(Object.keys(SUBESTATUS_LABEL) as SubestatusDisponible[]).map((k) => (
+                          <option key={k} value={k}>{SUBESTATUS_LABEL[k]}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
+                      Ubicación
+                      <select
+                        value={formEditar.ubicacionDisponible}
+                        onChange={(e) => setFormEditar((f) => ({ ...f, ubicacionDisponible: e.target.value as UbicacionDisponible }))}
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      >
+                        {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
+                          <option key={k} value={k}>{UBICACION_LABEL[k]}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {formEditar.subestatusDisponible === 'pendiente_placas' ? (
+                    <PendientePlacasMotivoSelector
+                      value={formEditar.pendientePlacasMotivo}
+                      onChange={(v) => setFormEditar((f) => ({ ...f, pendientePlacasMotivo: v }))}
+                    />
+                  ) : null}
+                </>
               )}
               <div className="rounded-md border border-skyline-border bg-skyline-bg/40 p-4 md:col-span-2">
                 <h3 className="text-sm font-semibold text-gray-900">Físico-mecánica, tarjeta de circulación y rotulación</h3>
@@ -1842,6 +2047,9 @@ export function Unidades() {
                       Renta / mes: {textoMontoUnidadTabla(selected.rentaMensual)}
                     </span>
                     <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
+                      Placa: {textoTipoPlacaTabla(selected)}
+                    </span>
+                    <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                       GPS: {selected.tieneGps ? 'Sí' : 'No'}
                     </span>
                     {selected.tieneGps && (selected.gpsNumero1 || selected.gpsNumero2) ? (
@@ -1854,6 +2062,17 @@ export function Unidades() {
                         <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                           {SUBESTATUS_LABEL[selected.subestatusDisponible ?? 'disponible']}
                         </span>
+                        {(selected.subestatusDisponible ?? '') === 'pendiente_placas' &&
+                        selected.pendientePlacasMotivo &&
+                        (selected.pendientePlacasMotivo === 'baja_placas' ||
+                          selected.pendientePlacasMotivo === 'pendiente_importar') ? (
+                          <span
+                            className="max-w-[14rem] rounded-md border border-amber-200/80 bg-amber-50/90 px-2 py-1 text-center text-[12px] font-medium leading-snug text-amber-950"
+                            title={PENDIENTE_PLACAS_MOTIVO_LABEL[selected.pendientePlacasMotivo]}
+                          >
+                            {PENDIENTE_PLACAS_MOTIVO_LABEL[selected.pendientePlacasMotivo]}
+                          </span>
+                        ) : null}
                         <span className="rounded-md border border-slate-200/80 bg-white px-2 py-1 text-center text-[13px] font-medium text-slate-700">
                           {UBICACION_LABEL[selected.ubicacionDisponible ?? 'lote']}
                         </span>
@@ -2239,6 +2458,9 @@ export function Unidades() {
               </p>
               <p className="mt-1 text-sm text-gray-600">Serie: {textoSerieCrud(previewUnidadNueva.numeroSerieCaja)}</p>
               <p className="mt-1 text-sm text-gray-600">
+                Tipo placa: {textoTipoPlacaTabla(previewUnidadNueva)}
+              </p>
+              <p className="mt-1 text-sm text-gray-600">
                 Valor comercial: {textoMontoUnidadTabla(previewUnidadNueva.valorComercial)} · Renta mensual:{' '}
                 {textoMontoUnidadTabla(previewUnidadNueva.rentaMensual)}
               </p>
@@ -2253,6 +2475,13 @@ export function Unidades() {
                 {previewUnidadNueva.estatus === 'Disponible'
                   ? ` · ${SUBESTATUS_LABEL[previewUnidadNueva.subestatusDisponible ?? 'disponible']} · ${UBICACION_LABEL[previewUnidadNueva.ubicacionDisponible ?? 'lote']}`
                   : ` · Cliente: ${previewUnidadNueva.clienteEnRenta || 'Sin cliente'}`}
+                {previewUnidadNueva.estatus === 'Disponible' &&
+                previewUnidadNueva.subestatusDisponible === 'pendiente_placas' &&
+                previewUnidadNueva.pendientePlacasMotivo &&
+                (previewUnidadNueva.pendientePlacasMotivo === 'baja_placas' ||
+                  previewUnidadNueva.pendientePlacasMotivo === 'pendiente_importar')
+                  ? ` · Motivo: ${PENDIENTE_PLACAS_MOTIVO_LABEL[previewUnidadNueva.pendientePlacasMotivo]}`
+                  : ''}
               </p>
               {(previewUnidadNueva.imagenes ?? []).length > 0 && (
                 <div className="mt-3 grid grid-cols-3 gap-2">

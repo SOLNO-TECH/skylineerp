@@ -20,7 +20,8 @@ const HOJAS = [
     table: 'unidades',
     sql: `SELECT id, placas, marca, modelo, numero_serie_caja, estatus, subestatus_disponible, ubicacion_disponible,
                  tipo_unidad, estado_mantenimiento, horas_motor, kilometraje, combustible_pct, observaciones,
-                 valor_comercial, renta_mensual, activo, creado_en, actualizado_en
+                 valor_comercial, renta_mensual, pendiente_placas_motivo, placa_federal, placa_local,
+                 activo, creado_en, actualizado_en
           FROM unidades ORDER BY id`,
     dateColumns: ['creado_en', 'actualizado_en'],
   },
