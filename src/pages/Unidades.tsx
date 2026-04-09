@@ -36,6 +36,10 @@ import {
   getDocumentoUrl,
   getImagenUrl,
   uploadDocumentoUnidad,
+  getMulitaGastosSemanaApi,
+  getMulitaGastosHistorialUnidadApi,
+  upsertMulitaGastoSemanaApi,
+  type MulitaGastoSemanalRow,
   type UnidadRow,
   type UnidadExpedienteFotoSlot,
 } from '../api/client';
@@ -111,6 +115,27 @@ function parseMontoUnidadInput(s: string): { ok: true; value: number | null } | 
 function textoMontoUnidadTabla(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return '—';
   return `$${n.toLocaleString('es-MX', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+}
+
+function lunesSemanaISO(base: Date = new Date()): string {
+  const d = new Date(base);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+function moverDiasISO(iso: string, dias: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const d = new Date(`${iso}T12:00:00`);
+  d.setDate(d.getDate() + dias);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
 }
 
 const EXPEDIENTE_FOTO_LABELS: Record<UnidadExpedienteFotoSlot, string> = {
@@ -359,10 +384,15 @@ export function Unidades() {
   const [savingEditar, setSavingEditar] = useState(false);
 
   const [panelMulitasOpen, setPanelMulitasOpen] = useState(false);
+  const [mulitaSemanaInicio, setMulitaSemanaInicio] = useState(lunesSemanaISO());
   const [mulitaEdits, setMulitaEdits] = useState<
     Record<string, { nomina: string; diesel: string; extras: string; casetas: string }>
   >({});
   const [mulitaSavingId, setMulitaSavingId] = useState<string | null>(null);
+  const [mulitaLoadingSemana, setMulitaLoadingSemana] = useState(false);
+  const [mulitaHistorialUnidadId, setMulitaHistorialUnidadId] = useState<string>('');
+  const [mulitaHistorialRows, setMulitaHistorialRows] = useState<MulitaGastoSemanalRow[]>([]);
+  const [mulitaHistorialLoading, setMulitaHistorialLoading] = useState(false);
 
   const [damageDesc, setDamageDesc] = useState('');
   const [newDoc, setNewDoc] = useState<{ tipo: DocTipo; file: File | null }>({ tipo: 'Otro', file: null });
@@ -525,18 +555,7 @@ export function Unidades() {
     );
   }, [unidadesMulitas]);
 
-  function totalMulitaMensualFila(u: UnidadRow): number | null {
-    const partes: Array<number | null | undefined> = [
-      u.mulitaNominaOperadorMensual,
-      u.mulitaDieselMensual,
-      u.mulitaHorasExtrasMensual,
-      u.mulitaCasetasMensual,
-    ];
-    if (partes.every((x) => x == null)) return null;
-    return partes.reduce((acc: number, x) => acc + Number(x ?? 0), 0);
-  }
-
-  function totalMulitaMensualDesdeForm(ed: {
+  function totalMulitaSemanalDesdeForm(ed: {
     nomina: string;
     diesel: string;
     extras: string;
@@ -553,28 +572,19 @@ export function Unidades() {
 
   const totalGastosTodasMulitas = useMemo(() => {
     if (!panelMulitasOpen) return null;
-    const totales = unidadesMulitas.map((u) => {
+    const totales = mulitasOrdenadas.map((u) => {
       const ed = mulitaEdits[u.id];
-      if (!ed) return totalMulitaMensualFila(u);
-      return totalMulitaMensualDesdeForm(ed);
+      if (!ed) return null;
+      return totalMulitaSemanalDesdeForm(ed);
     });
     if (totales.some((x) => x === null)) return null;
     const validos = totales.filter((x): x is number => x != null);
     if (validos.length === 0) return null;
     return validos.reduce((acc, x) => acc + x, 0);
-  }, [panelMulitasOpen, unidadesMulitas, mulitaEdits]);
+  }, [panelMulitasOpen, mulitasOrdenadas, mulitaEdits]);
 
   function openPanelMulitas() {
-    const next: Record<string, { nomina: string; diesel: string; extras: string; casetas: string }> = {};
-    for (const u of unidadesMulitas) {
-      next[u.id] = {
-        nomina: u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
-        diesel: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
-        extras: u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
-        casetas: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
-      };
-    }
-    setMulitaEdits(next);
+    setMulitaSemanaInicio(lunesSemanaISO());
     setPanelMulitasOpen(true);
     setError(null);
   }
@@ -592,34 +602,83 @@ export function Unidades() {
     const pe = parseMontoUnidadInput(ed.extras);
     const pc = parseMontoUnidadInput(ed.casetas);
     if (!pn.ok || !pd.ok || !pe.ok || !pc.ok) {
-      toast('Revisa los importes mensuales (MXN).', 'error');
+      toast('Revisa los importes semanales (MXN).', 'error');
       return;
     }
     setMulitaSavingId(id);
     try {
-      const u = await updateUnidad(id, {
-        mulitaNominaOperadorMensual: pn.value,
-        mulitaDieselMensual: pd.value,
-        mulitaHorasExtrasMensual: pe.value,
-        mulitaCasetasMensual: pc.value,
+      const gasto = await upsertMulitaGastoSemanaApi(id, {
+        semanaInicio: mulitaSemanaInicio,
+        nominaOperador: pn.value,
+        diesel: pd.value,
+        horasExtras: pe.value,
+        casetas: pc.value,
       });
-      setUnidades((prev) => prev.map((x) => (x.id === id ? u : x)));
       setMulitaEdits((prev) => ({
         ...prev,
         [id]: {
-          nomina: u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
-          diesel: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
-          extras: u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
-          casetas: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
+          nomina: gasto.nominaOperador != null ? String(gasto.nominaOperador) : '',
+          diesel: gasto.diesel != null ? String(gasto.diesel) : '',
+          extras: gasto.horasExtras != null ? String(gasto.horasExtras) : '',
+          casetas: gasto.casetas != null ? String(gasto.casetas) : '',
         },
       }));
-      toast('Gastos de mulita guardados.', 'success');
+      if (mulitaHistorialUnidadId === id) {
+        setMulitaHistorialLoading(true);
+        const rows = await getMulitaGastosHistorialUnidadApi(id, 16);
+        setMulitaHistorialRows(rows);
+        setMulitaHistorialLoading(false);
+      }
+      toast('Gasto semanal de mulita guardado.', 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Error', 'error');
     } finally {
       setMulitaSavingId(null);
     }
   }
+
+  useEffect(() => {
+    if (!panelMulitasOpen) return;
+    setMulitaLoadingSemana(true);
+    getMulitaGastosSemanaApi(mulitaSemanaInicio)
+      .then((rows) => {
+        const map: Record<string, { nomina: string; diesel: string; extras: string; casetas: string }> = {};
+        for (const u of mulitasOrdenadas) {
+          map[u.id] = { nomina: '', diesel: '', extras: '', casetas: '' };
+        }
+        for (const r of rows) {
+          map[r.unidadId] = {
+            nomina: r.nominaOperador != null ? String(r.nominaOperador) : '',
+            diesel: r.diesel != null ? String(r.diesel) : '',
+            extras: r.horasExtras != null ? String(r.horasExtras) : '',
+            casetas: r.casetas != null ? String(r.casetas) : '',
+          };
+        }
+        setMulitaEdits(map);
+      })
+      .catch((e) => {
+        toast(e instanceof Error ? e.message : 'Error al cargar semana', 'error');
+      })
+      .finally(() => setMulitaLoadingSemana(false));
+  }, [panelMulitasOpen, mulitaSemanaInicio, mulitasOrdenadas, toast]);
+
+  useEffect(() => {
+    if (!panelMulitasOpen) return;
+    if (!mulitasOrdenadas.length) {
+      setMulitaHistorialUnidadId('');
+      setMulitaHistorialRows([]);
+      return;
+    }
+    if (!mulitaHistorialUnidadId) {
+      setMulitaHistorialUnidadId(mulitasOrdenadas[0].id);
+      return;
+    }
+    setMulitaHistorialLoading(true);
+    getMulitaGastosHistorialUnidadApi(mulitaHistorialUnidadId, 16)
+      .then((rows) => setMulitaHistorialRows(rows))
+      .catch((e) => toast(e instanceof Error ? e.message : 'Error al cargar historial', 'error'))
+      .finally(() => setMulitaHistorialLoading(false));
+  }, [panelMulitasOpen, mulitaHistorialUnidadId, mulitasOrdenadas, toast]);
 
   function openDrawer(id: string, nextTab: Tab = 'expediente') {
     setSelectedId(id);
@@ -1049,12 +1108,37 @@ export function Unidades() {
         >
           <div className="border-b border-skyline-border bg-slate-50/90 px-5 py-4 sm:px-6">
             <h2 id="mulitas-gastos-heading" className="text-lg font-semibold text-gray-900">
-              Unidades Mulitas · gastos de operación (mensual)
+              Unidades Mulitas · gastos de operación (semanal)
             </h2>
             <p className="mt-1.5 text-sm text-gray-600">
-              Puedes editar aquí los montos mensuales por unidad. Si la unidad tiene renta con operador, aquí verás
+              Puedes editar aquí los montos por semana sin perder historial anterior. Si la unidad tiene renta con operador, aquí verás
               el operador vinculado.
             </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => setMulitaSemanaInicio((v) => moverDiasISO(v, -7))}
+              >
+                Semana anterior
+              </button>
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Semana (lunes)
+                <input
+                  type="date"
+                  value={mulitaSemanaInicio}
+                  onChange={(e) => setMulitaSemanaInicio(e.target.value)}
+                  className="ml-2 rounded-md border border-skyline-border bg-white px-2 py-1 text-sm font-medium text-slate-800"
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => setMulitaSemanaInicio((v) => moverDiasISO(v, 7))}
+              >
+                Semana siguiente
+              </button>
+            </div>
           </div>
 
           <div className="px-4 pb-2 pt-4 sm:px-6 sm:pt-5">
@@ -1063,6 +1147,8 @@ export function Unidades() {
                 No hay unidades con tipo Mulita. Registra una unidad y elige «Mulita» en tipo de unidad, o edita una
                 existente.
               </p>
+            ) : mulitaLoadingSemana ? (
+              <div className="py-10 text-center text-sm text-gray-500">Cargando semana…</div>
             ) : (
               <div className="overflow-x-auto rounded-lg border border-skyline-border">
                 <table className="min-w-[72rem] w-full divide-y divide-skyline-border text-sm">
@@ -1088,7 +1174,7 @@ export function Unidades() {
                         Casetas
                       </CrudTableTh>
                       <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle text-right" icon="mdi:calendar-month-outline">
-                        Total / mes
+                        Total / semana
                       </CrudTableTh>
                       <CrudTableTh className="w-[1%] whitespace-nowrap px-3 py-3 align-middle" icon="mdi:content-save-outline">
                         Acción
@@ -1098,12 +1184,12 @@ export function Unidades() {
                   <tbody className="divide-y divide-skyline-border bg-white">
                     {mulitasOrdenadas.map((u) => {
                       const ed = mulitaEdits[u.id] ?? {
-                        nomina: u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
-                        diesel: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
-                        extras: u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
-                        casetas: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
+                        nomina: '',
+                        diesel: '',
+                        extras: '',
+                        casetas: '',
                       };
-                      const filaTotal = totalMulitaMensualDesdeForm(ed);
+                      const filaTotal = totalMulitaSemanalDesdeForm(ed);
                       const operador = (u.operadorEnRenta ?? '').trim();
                       const cliente = (u.clienteEnRenta ?? '').trim();
                       const inputCls =
@@ -1197,13 +1283,13 @@ export function Unidades() {
             <p className="text-sm text-gray-600">
               {unidadesMulitas.length > 0 && totalGastosTodasMulitas !== null ? (
                 <>
-                  <span className="font-medium text-gray-800">Suma todas las mulitas:</span>{' '}
+                  <span className="font-medium text-gray-800">Suma semanal de mulitas:</span>{' '}
                   <span className="font-semibold text-gray-900">
                     {textoMontoUnidadTabla(totalGastosTodasMulitas)}
                   </span>
                 </>
               ) : unidadesMulitas.length > 0 ? (
-                <span>Aun no hay gastos capturados para mostrar suma.</span>
+                <span>Captura importes válidos para ver la suma semanal.</span>
               ) : null}
             </p>
             <button
@@ -1215,6 +1301,57 @@ export function Unidades() {
               Ocultar
             </button>
           </div>
+
+          {mulitasOrdenadas.length > 0 ? (
+            <div className="border-t border-skyline-border bg-white px-5 py-4 sm:px-6">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Historial por unidad</span>
+                <select
+                  value={mulitaHistorialUnidadId}
+                  onChange={(e) => setMulitaHistorialUnidadId(e.target.value)}
+                  className="rounded-md border border-skyline-border bg-white px-2 py-1 text-sm text-slate-800"
+                >
+                  {mulitasOrdenadas.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {(u.numeroEconomico ?? '').trim() || u.placas} · {u.placas}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {mulitaHistorialLoading ? (
+                <p className="text-sm text-gray-500">Cargando historial…</p>
+              ) : mulitaHistorialRows.length === 0 ? (
+                <p className="text-sm text-gray-500">Sin semanas guardadas para esta unidad.</p>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-skyline-border">
+                  <table className="min-w-[44rem] w-full divide-y divide-skyline-border text-sm">
+                    <thead className="bg-slate-50">
+                      <tr className={CRUD_THEAD_TR}>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:calendar">Semana</CrudTableTh>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:cash">Nómina</CrudTableTh>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:gas-station-outline">Diésel</CrudTableTh>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:clock-outline">Horas extras</CrudTableTh>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:road-variant">Casetas</CrudTableTh>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:sigma">Total</CrudTableTh>
+                      </tr>
+                    </thead>
+                    <tbody className={CRUD_TBODY}>
+                      {mulitaHistorialRows.map((r, idx) => (
+                        <tr key={r.id} className={crudTableRowClass(idx)}>
+                          <td className="px-3 py-2 text-center font-medium text-slate-800">{r.semanaInicio}</td>
+                          <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.nominaOperador)}</td>
+                          <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.diesel)}</td>
+                          <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.horasExtras)}</td>
+                          <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.casetas)}</td>
+                          <td className="px-3 py-2 text-center font-semibold tabular-nums">{textoMontoUnidadTabla(r.totalSemanal)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : null}
         </section>
       )}
 

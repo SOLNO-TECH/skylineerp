@@ -1442,9 +1442,24 @@ export function initUnidades() {
       fecha_subida TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (unidad_id) REFERENCES unidades(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS mulita_gastos_semanales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      unidad_id INTEGER NOT NULL,
+      semana_inicio TEXT NOT NULL,
+      nomina_operador REAL,
+      diesel REAL,
+      horas_extras REAL,
+      casetas REAL,
+      notas TEXT DEFAULT '',
+      creado_en TEXT DEFAULT (datetime('now')),
+      actualizado_en TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (unidad_id) REFERENCES unidades(id) ON DELETE CASCADE
+    );
     CREATE INDEX IF NOT EXISTS idx_unidad_docs_unidad ON unidad_documentos(unidad_id);
     CREATE INDEX IF NOT EXISTS idx_unidad_act_unidad ON unidad_actividad(unidad_id);
     CREATE INDEX IF NOT EXISTS idx_unidad_img_unidad ON unidad_imagenes(unidad_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mulita_gasto_semana_unique ON mulita_gastos_semanales(unidad_id, semana_inicio);
+    CREATE INDEX IF NOT EXISTS idx_mulita_gastos_semana ON mulita_gastos_semanales(semana_inicio);
   `);
   // Seed inicial si no hay unidades
   const count = db.prepare('SELECT COUNT(*) as n FROM unidades').get();
@@ -1473,6 +1488,129 @@ export function initUnidades() {
     insAct.run(4, 'Check-out registrado', 'Combustible y herramientas OK.', 'mdi:clipboard-check');
   }
   migrarUnidades();
+}
+
+function normalizeSemanaInicio(v) {
+  const t = String(v || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
+  return t;
+}
+
+function totalMulitaSemanalRow(r) {
+  return (
+    (Number(r.nomina_operador) || 0) +
+    (Number(r.diesel) || 0) +
+    (Number(r.horas_extras) || 0) +
+    (Number(r.casetas) || 0)
+  );
+}
+
+export function getMulitaGastosSemana(semanaInicio) {
+  ensureUnidadesReadWriteColumns();
+  const semana = normalizeSemanaInicio(semanaInicio);
+  if (!semana) return [];
+  const rows = db
+    .prepare(
+      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas
+       FROM mulita_gastos_semanales
+       WHERE semana_inicio = ?
+       ORDER BY unidad_id`
+    )
+    .all(semana);
+  return rows.map((r) => ({
+    id: String(r.id),
+    unidadId: String(r.unidad_id),
+    semanaInicio: r.semana_inicio,
+    nominaOperador: r.nomina_operador != null ? Number(r.nomina_operador) : null,
+    diesel: r.diesel != null ? Number(r.diesel) : null,
+    horasExtras: r.horas_extras != null ? Number(r.horas_extras) : null,
+    casetas: r.casetas != null ? Number(r.casetas) : null,
+    notas: r.notas || '',
+    totalSemanal: Math.round(totalMulitaSemanalRow(r) * 100) / 100,
+  }));
+}
+
+export function upsertMulitaGastoSemana(unidadId, data, usuarioId = null) {
+  ensureUnidadesReadWriteColumns();
+  const uid = Number(unidadId);
+  if (!Number.isFinite(uid) || uid < 1) return null;
+  const unidad = db
+    .prepare(
+      `SELECT id, placas, COALESCE(numero_economico, '') as numero_economico, COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad
+       FROM unidades WHERE id = ? AND activo = 1`
+    )
+    .get(uid);
+  if (!unidad || unidad.tipo_unidad !== 'maquinaria') return null;
+  const semana = normalizeSemanaInicio(data?.semanaInicio ?? data?.semana_inicio);
+  if (!semana) return null;
+  const nomina = coerceOptionalMoneyUnidad(data?.nominaOperador ?? data?.nomina_operador);
+  const diesel = coerceOptionalMoneyUnidad(data?.diesel);
+  const horas = coerceOptionalMoneyUnidad(data?.horasExtras ?? data?.horas_extras);
+  const casetas = coerceOptionalMoneyUnidad(data?.casetas);
+  const notas = String(data?.notas || '').trim();
+  db.prepare(
+    `INSERT INTO mulita_gastos_semanales
+       (unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, notas)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(unidad_id, semana_inicio) DO UPDATE SET
+       nomina_operador = excluded.nomina_operador,
+       diesel = excluded.diesel,
+       horas_extras = excluded.horas_extras,
+       casetas = excluded.casetas,
+       notas = excluded.notas,
+       actualizado_en = datetime('now')`
+  ).run(uid, semana, nomina, diesel, horas, casetas, notas);
+  const row = db
+    .prepare(
+      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas
+       FROM mulita_gastos_semanales WHERE unidad_id = ? AND semana_inicio = ?`
+    )
+    .get(uid, semana);
+  logUnidadActividadRow(
+    uid,
+    'Gasto semanal mulita actualizado',
+    `Semana ${semana} · ${(unidad.numero_economico || unidad.placas || '').trim()}`,
+    'mdi:calendar-edit',
+    usuarioId
+  );
+  return {
+    id: String(row.id),
+    unidadId: String(row.unidad_id),
+    semanaInicio: row.semana_inicio,
+    nominaOperador: row.nomina_operador != null ? Number(row.nomina_operador) : null,
+    diesel: row.diesel != null ? Number(row.diesel) : null,
+    horasExtras: row.horas_extras != null ? Number(row.horas_extras) : null,
+    casetas: row.casetas != null ? Number(row.casetas) : null,
+    notas: row.notas || '',
+    totalSemanal: Math.round(totalMulitaSemanalRow(row) * 100) / 100,
+  };
+}
+
+export function getMulitaGastosHistorialUnidad(unidadId, limit = 12) {
+  ensureUnidadesReadWriteColumns();
+  const uid = Number(unidadId);
+  if (!Number.isFinite(uid) || uid < 1) return [];
+  const lim = Math.min(Math.max(1, Number(limit) || 12), 52);
+  const rows = db
+    .prepare(
+      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas
+       FROM mulita_gastos_semanales
+       WHERE unidad_id = ?
+       ORDER BY semana_inicio DESC
+       LIMIT ?`
+    )
+    .all(uid, lim);
+  return rows.map((r) => ({
+    id: String(r.id),
+    unidadId: String(r.unidad_id),
+    semanaInicio: r.semana_inicio,
+    nominaOperador: r.nomina_operador != null ? Number(r.nomina_operador) : null,
+    diesel: r.diesel != null ? Number(r.diesel) : null,
+    horasExtras: r.horas_extras != null ? Number(r.horas_extras) : null,
+    casetas: r.casetas != null ? Number(r.casetas) : null,
+    notas: r.notas || '',
+    totalSemanal: Math.round(totalMulitaSemanalRow(r) * 100) / 100,
+  }));
 }
 
 export function getAllUnidades() {
@@ -3273,12 +3411,13 @@ export function getFinanzasGastosResumen(limit = 200) {
   const mul = db
     .prepare(
       `SELECT COALESCE(SUM(
-         COALESCE(u.mulita_nomina_operador_mensual, 0) +
-         COALESCE(u.mulita_diesel_mensual, 0) +
-         COALESCE(u.mulita_horas_extras_mensual, 0) +
-         COALESCE(u.mulita_casetas_mensual, 0)
+         COALESCE(g.nomina_operador, 0) +
+         COALESCE(g.diesel, 0) +
+         COALESCE(g.horas_extras, 0) +
+         COALESCE(g.casetas, 0)
        ), 0) AS s
-       FROM unidades u
+       FROM mulita_gastos_semanales g
+       INNER JOIN unidades u ON u.id = g.unidad_id
        WHERE u.activo = 1 AND COALESCE(u.tipo_unidad, 'remolque_seco') = 'maquinaria'`
     )
     .get();
@@ -3308,29 +3447,24 @@ export function getFinanzasGastosResumen(limit = 200) {
         LEFT JOIN proveedores p ON p.id = m.proveedor_id
         UNION ALL
         SELECT 'operacion_mulita',
-               CAST(u.id AS TEXT),
-               COALESCE(u.actualizado_en, u.creado_en, date('now')),
-               ('Gasto operación mulita · ' ||
+               CAST(g.id AS TEXT),
+               g.semana_inicio,
+               ('Operación mulita · Semana ' || g.semana_inicio || ' · ' ||
                 COALESCE(NULLIF(TRIM(COALESCE(u.numero_economico, '')), ''), u.placas)),
                (
-                 COALESCE(u.mulita_nomina_operador_mensual, 0) +
-                 COALESCE(u.mulita_diesel_mensual, 0) +
-                 COALESCE(u.mulita_horas_extras_mensual, 0) +
-                 COALESCE(u.mulita_casetas_mensual, 0)
+                 COALESCE(g.nomina_operador, 0) +
+                 COALESCE(g.diesel, 0) +
+                 COALESCE(g.horas_extras, 0) +
+                 COALESCE(g.casetas, 0)
                ),
                NULL,
                u.placas,
                NULL,
                NULL
-        FROM unidades u
+        FROM mulita_gastos_semanales g
+        INNER JOIN unidades u ON u.id = g.unidad_id
         WHERE u.activo = 1
           AND COALESCE(u.tipo_unidad, 'remolque_seco') = 'maquinaria'
-          AND (
-            u.mulita_nomina_operador_mensual IS NOT NULL OR
-            u.mulita_diesel_mensual IS NOT NULL OR
-            u.mulita_horas_extras_mensual IS NOT NULL OR
-            u.mulita_casetas_mensual IS NOT NULL
-          )
         UNION ALL
         SELECT 'factura_proveedor',
                CAST(f.id AS TEXT),

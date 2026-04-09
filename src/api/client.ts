@@ -660,6 +660,18 @@ export type UnidadRow = {
 
 export type UnidadExpedienteFotoSlot = 'fm_anterior' | 'fm_vigente' | 'tarjeta_circulacion';
 
+export type MulitaGastoSemanalRow = {
+  id: string;
+  unidadId: string;
+  semanaInicio: string;
+  nominaOperador: number | null;
+  diesel: number | null;
+  horasExtras: number | null;
+  casetas: number | null;
+  totalSemanal: number;
+  notas?: string;
+};
+
 export async function getUnidades(): Promise<UnidadRow[]> {
   const res = await fetchWithAuth(`${API_BASE}/unidades`);
   const data = await parseResponse<{ unidades?: UnidadRow[]; error?: string }>(res);
@@ -672,6 +684,45 @@ export async function getUnidad(id: string): Promise<UnidadRow> {
   const data = await parseResponse<{ unidad?: UnidadRow; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al cargar unidad');
   return data.unidad!;
+}
+
+export async function getMulitaGastosSemanaApi(semanaInicio: string): Promise<MulitaGastoSemanalRow[]> {
+  const q = new URLSearchParams({ semanaInicio });
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/gastos-semana?${q.toString()}`, { cache: 'no-store' });
+  const data = await parseResponse<{ gastos?: MulitaGastoSemanalRow[]; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al cargar gastos semanales de mulitas');
+  return data.gastos ?? [];
+}
+
+export async function upsertMulitaGastoSemanaApi(
+  unidadId: string,
+  p: {
+    semanaInicio: string;
+    nominaOperador?: number | null;
+    diesel?: number | null;
+    horasExtras?: number | null;
+    casetas?: number | null;
+    notas?: string;
+  }
+): Promise<MulitaGastoSemanalRow> {
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/gastos-semana`, {
+    method: 'PUT',
+    body: JSON.stringify(p),
+  });
+  const data = await parseResponse<{ gasto?: MulitaGastoSemanalRow; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al guardar gasto semanal de mulita');
+  return data.gasto!;
+}
+
+export async function getMulitaGastosHistorialUnidadApi(
+  unidadId: string,
+  limit = 12
+): Promise<MulitaGastoSemanalRow[]> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/gastos-historial?${q.toString()}`, { cache: 'no-store' });
+  const data = await parseResponse<{ gastos?: MulitaGastoSemanalRow[]; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al cargar historial de gastos semanales');
+  return data.gastos ?? [];
 }
 
 export async function createUnidad(p: {

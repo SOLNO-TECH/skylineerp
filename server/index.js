@@ -19,6 +19,9 @@ import {
   getUnidadById,
   createUnidad,
   updateUnidadDb,
+  getMulitaGastosSemana,
+  getMulitaGastosHistorialUnidad,
+  upsertMulitaGastoSemana,
   setEstatusUnidad,
   addUnidadDocumento,
   deleteUnidadDocumento,
@@ -723,6 +726,48 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
     res.json({ unidad: updated });
   } catch (err) {
     res.status(500).json({ error: 'Error al actualizar unidad' });
+  }
+});
+
+app.get('/api/mulitas/gastos-semana', requireAuth, (req, res) => {
+  try {
+    const semanaInicio = String(req.query?.semanaInicio ?? '').trim();
+    const gastos = getMulitaGastosSemana(semanaInicio);
+    res.json({ semanaInicio, gastos });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar gastos semanales de mulitas' });
+  }
+});
+
+app.put('/api/mulitas/:unidadId/gastos-semana', requireAuth, requireEdicionFlota, (req, res) => {
+  try {
+    const body = req.body || {};
+    const gasto = upsertMulitaGastoSemana(
+      req.params.unidadId,
+      {
+        semanaInicio: body.semanaInicio ?? body.semana_inicio,
+        nominaOperador: body.nominaOperador ?? body.nomina_operador,
+        diesel: body.diesel,
+        horasExtras: body.horasExtras ?? body.horas_extras,
+        casetas: body.casetas,
+        notas: body.notas,
+      },
+      req.user.id
+    );
+    if (!gasto) return res.status(400).json({ error: 'Datos inválidos para guardar gasto semanal' });
+    res.json({ gasto });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al guardar gasto semanal de mulita' });
+  }
+});
+
+app.get('/api/mulitas/:unidadId/gastos-historial', requireAuth, (req, res) => {
+  try {
+    const lim = parseInt(String(req.query.limit ?? ''), 10);
+    const gastos = getMulitaGastosHistorialUnidad(req.params.unidadId, Number.isFinite(lim) ? lim : 12);
+    res.json({ gastos });
+  } catch (err) {
+    res.status(500).json({ error: 'Error al cargar historial de gastos semanales' });
   }
 });
 
