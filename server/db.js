@@ -280,9 +280,35 @@ function ensureUnidadesPlacasMetadataColumns() {
   }
 }
 
+/** Gastos de operación mensuales (MXN) por mulita; idempotente. */
+let unidadesMulitaOperacionEnsured = false;
+function ensureUnidadesMulitaOperacionColumns() {
+  if (unidadesMulitaOperacionEnsured) return;
+  try {
+    const cols = db.prepare('PRAGMA table_info(unidades)').all().map((r) => r.name);
+    if (cols.length === 0) return;
+    if (!cols.includes('mulita_nomina_operador_mensual')) {
+      db.exec('ALTER TABLE unidades ADD COLUMN mulita_nomina_operador_mensual REAL');
+    }
+    if (!cols.includes('mulita_diesel_mensual')) {
+      db.exec('ALTER TABLE unidades ADD COLUMN mulita_diesel_mensual REAL');
+    }
+    if (!cols.includes('mulita_horas_extras_mensual')) {
+      db.exec('ALTER TABLE unidades ADD COLUMN mulita_horas_extras_mensual REAL');
+    }
+    if (!cols.includes('mulita_casetas_mensual')) {
+      db.exec('ALTER TABLE unidades ADD COLUMN mulita_casetas_mensual REAL');
+    }
+    unidadesMulitaOperacionEnsured = true;
+  } catch (e) {
+    console.warn('Columnas gastos operación mulitas (unidades):', e?.message);
+  }
+}
+
 function ensureUnidadesReadWriteColumns() {
   ensureUnidadesMoneyColumns();
   ensureUnidadesPlacasMetadataColumns();
+  ensureUnidadesMulitaOperacionColumns();
 }
 
 function normalizePendientePlacasMotivo(v) {
@@ -1469,13 +1495,24 @@ export function getAllUnidades() {
             pendiente_placas_motivo,
             COALESCE(placa_federal, 0) as placa_federal,
             COALESCE(placa_local, 0) as placa_local,
+            mulita_nomina_operador_mensual,
+            mulita_diesel_mensual,
+            mulita_horas_extras_mensual,
+            mulita_casetas_mensual,
             (
               SELECT r.cliente_nombre
               FROM rentas r
               WHERE r.unidad_id = unidades.id AND r.estado IN ('reservada', 'activa')
               ORDER BY CASE r.estado WHEN 'activa' THEN 0 ELSE 1 END, r.fecha_inicio DESC
               LIMIT 1
-            ) AS cliente_en_renta
+            ) AS cliente_en_renta,
+            (
+              SELECT COALESCE(r.operador_asignado, '')
+              FROM rentas r
+              WHERE r.unidad_id = unidades.id AND r.estado IN ('reservada', 'activa')
+              ORDER BY CASE r.estado WHEN 'activa' THEN 0 ELSE 1 END, r.fecha_inicio DESC
+              LIMIT 1
+            ) AS operador_en_renta
      FROM unidades WHERE activo = 1
      ORDER BY CASE WHEN TRIM(COALESCE(numero_economico, '')) = '' THEN 1 ELSE 0 END,
               numero_economico COLLATE NOCASE,
@@ -1504,6 +1541,7 @@ export function getAllUnidades() {
     subestatusDisponible: u.subestatus_disponible || 'disponible',
     ubicacionDisponible: u.ubicacion_disponible || 'lote',
     clienteEnRenta: u.cliente_en_renta || '',
+    operadorEnRenta: u.operador_en_renta || '',
     kilometraje: u.kilometraje,
     combustiblePct: u.combustible_pct,
     observaciones: u.observaciones || '',
@@ -1521,6 +1559,12 @@ export function getAllUnidades() {
     pendientePlacasMotivo: normalizePendientePlacasMotivo(u.pendiente_placas_motivo),
     placaFederal: Number(u.placa_federal) === 1,
     placaLocal: Number(u.placa_local) === 1,
+    mulitaNominaOperadorMensual:
+      u.mulita_nomina_operador_mensual != null ? Number(u.mulita_nomina_operador_mensual) : null,
+    mulitaDieselMensual: u.mulita_diesel_mensual != null ? Number(u.mulita_diesel_mensual) : null,
+    mulitaHorasExtrasMensual:
+      u.mulita_horas_extras_mensual != null ? Number(u.mulita_horas_extras_mensual) : null,
+    mulitaCasetasMensual: u.mulita_casetas_mensual != null ? Number(u.mulita_casetas_mensual) : null,
     documentos: docs.filter(d => d.unidad_id === u.id).map(d => ({
       id: String(d.id),
       nombre: d.nombre,
@@ -1565,13 +1609,24 @@ export function getUnidadById(id) {
             pendiente_placas_motivo,
             COALESCE(placa_federal, 0) as placa_federal,
             COALESCE(placa_local, 0) as placa_local,
+            mulita_nomina_operador_mensual,
+            mulita_diesel_mensual,
+            mulita_horas_extras_mensual,
+            mulita_casetas_mensual,
             (
               SELECT r.cliente_nombre
               FROM rentas r
               WHERE r.unidad_id = unidades.id AND r.estado IN ('reservada', 'activa')
               ORDER BY CASE r.estado WHEN 'activa' THEN 0 ELSE 1 END, r.fecha_inicio DESC
               LIMIT 1
-            ) AS cliente_en_renta
+            ) AS cliente_en_renta,
+            (
+              SELECT COALESCE(r.operador_asignado, '')
+              FROM rentas r
+              WHERE r.unidad_id = unidades.id AND r.estado IN ('reservada', 'activa')
+              ORDER BY CASE r.estado WHEN 'activa' THEN 0 ELSE 1 END, r.fecha_inicio DESC
+              LIMIT 1
+            ) AS operador_en_renta
      FROM unidades WHERE id = ? AND activo = 1`
   ).get(Number(id));
   if (!u) return null;
@@ -1592,6 +1647,7 @@ export function getUnidadById(id) {
     subestatusDisponible: u.subestatus_disponible || 'disponible',
     ubicacionDisponible: u.ubicacion_disponible || 'lote',
     clienteEnRenta: u.cliente_en_renta || '',
+    operadorEnRenta: u.operador_en_renta || '',
     kilometraje: u.kilometraje,
     combustiblePct: u.combustible_pct,
     observaciones: u.observaciones || '',
@@ -1609,6 +1665,12 @@ export function getUnidadById(id) {
     pendientePlacasMotivo: normalizePendientePlacasMotivo(u.pendiente_placas_motivo),
     placaFederal: Number(u.placa_federal) === 1,
     placaLocal: Number(u.placa_local) === 1,
+    mulitaNominaOperadorMensual:
+      u.mulita_nomina_operador_mensual != null ? Number(u.mulita_nomina_operador_mensual) : null,
+    mulitaDieselMensual: u.mulita_diesel_mensual != null ? Number(u.mulita_diesel_mensual) : null,
+    mulitaHorasExtrasMensual:
+      u.mulita_horas_extras_mensual != null ? Number(u.mulita_horas_extras_mensual) : null,
+    mulitaCasetasMensual: u.mulita_casetas_mensual != null ? Number(u.mulita_casetas_mensual) : null,
     documentos: docs.map(d => ({ id: String(d.id), nombre: d.nombre, tipo: d.tipo, ruta: d.ruta || '', fechaSubida: d.fecha_subida })),
     actividad: acts.map(a => ({ id: String(a.id), accion: a.accion, detalle: a.detalle, fecha: a.fecha, icon: a.icon || 'mdi:information' })),
     imagenes: imgs.map(i => ({
@@ -1763,6 +1825,10 @@ export function createUnidad(data, usuarioId = null) {
     pendientePlacasMotivo,
     placaFederal,
     placaLocal,
+    mulitaNominaOperadorMensual,
+    mulitaDieselMensual,
+    mulitaHorasExtrasMensual,
+    mulitaCasetasMensual,
   } = data;
   if (!placas || !marca || !modelo) return null;
   const ne = String(numeroEconomico ?? '').trim();
@@ -1789,8 +1855,12 @@ export function createUnidad(data, usuarioId = null) {
   if (subestatus === 'pendiente_placas' && !motivoSql) return null;
   const pf = coercePlacaBool(placaFederal ?? data.placa_federal);
   const plBool = coercePlacaBool(placaLocal ?? data.placa_local);
+  const mNom = coerceOptionalMoneyUnidad(mulitaNominaOperadorMensual ?? data.mulita_nomina_operador_mensual);
+  const mDie = coerceOptionalMoneyUnidad(mulitaDieselMensual ?? data.mulita_diesel_mensual);
+  const mHex = coerceOptionalMoneyUnidad(mulitaHorasExtrasMensual ?? data.mulita_horas_extras_mensual);
+  const mCas = coerceOptionalMoneyUnidad(mulitaCasetasMensual ?? data.mulita_casetas_mensual);
   const run = db.prepare(
-    'INSERT INTO unidades (placas, numero_economico, marca, modelo, estatus, numero_serie_caja, tiene_gps, gps_numero_1, gps_numero_2, subestatus_disponible, ubicacion_disponible, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor, gestor_fisico_mecanica, unidad_rotulada, valor_comercial, renta_mensual, pendiente_placas_motivo, placa_federal, placa_local) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO unidades (placas, numero_economico, marca, modelo, estatus, numero_serie_caja, tiene_gps, gps_numero_1, gps_numero_2, subestatus_disponible, ubicacion_disponible, kilometraje, combustible_pct, observaciones, tipo_unidad, horas_motor, gestor_fisico_mecanica, unidad_rotulada, valor_comercial, renta_mensual, pendiente_placas_motivo, placa_federal, placa_local, mulita_nomina_operador_mensual, mulita_diesel_mensual, mulita_horas_extras_mensual, mulita_casetas_mensual) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const r = run.run(
     String(placas).trim(),
@@ -1815,7 +1885,11 @@ export function createUnidad(data, usuarioId = null) {
     rm,
     motivoSql,
     pf ? 1 : 0,
-    plBool ? 1 : 0
+    plBool ? 1 : 0,
+    mNom,
+    mDie,
+    mHex,
+    mCas
   );
   const id = r.lastInsertRowid;
   logUnidadActividadRow(
@@ -1863,6 +1937,10 @@ export function updateUnidadDb(id, data, usuarioId = null) {
     pendientePlacasMotivo,
     placaFederal,
     placaLocal,
+    mulitaNominaOperadorMensual,
+    mulitaDieselMensual,
+    mulitaHorasExtrasMensual,
+    mulitaCasetasMensual,
   } = data;
   if (numeroEconomico != null) {
     const ne = String(numeroEconomico).trim();
@@ -1952,6 +2030,22 @@ export function updateUnidadDb(id, data, usuarioId = null) {
     updates.push('placa_local = ?');
     values.push(coercePlacaBool(placaLocal) ? 1 : 0);
   }
+  if (mulitaNominaOperadorMensual !== undefined) {
+    updates.push('mulita_nomina_operador_mensual = ?');
+    values.push(coerceOptionalMoneyUnidad(mulitaNominaOperadorMensual));
+  }
+  if (mulitaDieselMensual !== undefined) {
+    updates.push('mulita_diesel_mensual = ?');
+    values.push(coerceOptionalMoneyUnidad(mulitaDieselMensual));
+  }
+  if (mulitaHorasExtrasMensual !== undefined) {
+    updates.push('mulita_horas_extras_mensual = ?');
+    values.push(coerceOptionalMoneyUnidad(mulitaHorasExtrasMensual));
+  }
+  if (mulitaCasetasMensual !== undefined) {
+    updates.push('mulita_casetas_mensual = ?');
+    values.push(coerceOptionalMoneyUnidad(mulitaCasetasMensual));
+  }
   if (updates.length === 0) return getUnidadById(id);
   updates.push("actualizado_en = datetime('now')");
   values.push(id);
@@ -1980,6 +2074,10 @@ export function updateUnidadDb(id, data, usuarioId = null) {
   if (pendientePlacasMotivo !== undefined) campos.push('pendiente_placas_motivo');
   if (placaFederal !== undefined) campos.push('placa_federal');
   if (placaLocal !== undefined) campos.push('placa_local');
+  if (mulitaNominaOperadorMensual !== undefined) campos.push('mulita_nomina_operador_mensual');
+  if (mulitaDieselMensual !== undefined) campos.push('mulita_diesel_mensual');
+  if (mulitaHorasExtrasMensual !== undefined) campos.push('mulita_horas_extras_mensual');
+  if (mulitaCasetasMensual !== undefined) campos.push('mulita_casetas_mensual');
   if (campos.length > 0) {
     logUnidadActividadRow(
       id,
@@ -3166,11 +3264,23 @@ export function getReporteCuentasPorPagar() {
   return { proveedores, facturasPendientesDetalle: lista, totalesGlobales: totales };
 }
 
-/** Consolidado para Finanzas → Gastos: mantenimiento + facturas y pagos a proveedores. */
+/** Consolidado para Finanzas → Gastos: mantenimiento + mulitas + facturas y pagos a proveedores. */
 export function getFinanzasGastosResumen(limit = 200) {
   const lim = Math.min(Math.max(1, Number(limit) || 200), 500);
   const mant = db
     .prepare(`SELECT COALESCE(SUM(m.costo), 0) AS s FROM mantenimiento m INNER JOIN unidades u ON u.id = m.unidad_id`)
+    .get();
+  const mul = db
+    .prepare(
+      `SELECT COALESCE(SUM(
+         COALESCE(u.mulita_nomina_operador_mensual, 0) +
+         COALESCE(u.mulita_diesel_mensual, 0) +
+         COALESCE(u.mulita_horas_extras_mensual, 0) +
+         COALESCE(u.mulita_casetas_mensual, 0)
+       ), 0) AS s
+       FROM unidades u
+       WHERE u.activo = 1 AND COALESCE(u.tipo_unidad, 'remolque_seco') = 'maquinaria'`
+    )
     .get();
   const fact = db.prepare(`SELECT COALESCE(SUM(f.monto_total), 0) AS s FROM proveedor_facturas f WHERE f.activo = 1`).get();
   const pag = db
@@ -3196,6 +3306,31 @@ export function getFinanzasGastosResumen(limit = 200) {
         FROM mantenimiento m
         INNER JOIN unidades u ON u.id = m.unidad_id
         LEFT JOIN proveedores p ON p.id = m.proveedor_id
+        UNION ALL
+        SELECT 'operacion_mulita',
+               CAST(u.id AS TEXT),
+               COALESCE(u.actualizado_en, u.creado_en, date('now')),
+               ('Gasto operación mulita · ' ||
+                COALESCE(NULLIF(TRIM(COALESCE(u.numero_economico, '')), ''), u.placas)),
+               (
+                 COALESCE(u.mulita_nomina_operador_mensual, 0) +
+                 COALESCE(u.mulita_diesel_mensual, 0) +
+                 COALESCE(u.mulita_horas_extras_mensual, 0) +
+                 COALESCE(u.mulita_casetas_mensual, 0)
+               ),
+               NULL,
+               u.placas,
+               NULL,
+               NULL
+        FROM unidades u
+        WHERE u.activo = 1
+          AND COALESCE(u.tipo_unidad, 'remolque_seco') = 'maquinaria'
+          AND (
+            u.mulita_nomina_operador_mensual IS NOT NULL OR
+            u.mulita_diesel_mensual IS NOT NULL OR
+            u.mulita_horas_extras_mensual IS NOT NULL OR
+            u.mulita_casetas_mensual IS NOT NULL
+          )
         UNION ALL
         SELECT 'factura_proveedor',
                CAST(f.id AS TEXT),
@@ -3232,6 +3367,7 @@ export function getFinanzasGastosResumen(limit = 200) {
   return {
     totales: {
       mantenimiento: Number(mant.s) || 0,
+      operacionMulitas: Number(mul.s) || 0,
       proveedoresFacturado: facturado,
       proveedoresPagado: pagado,
       proveedoresSaldo: facturado - pagado,

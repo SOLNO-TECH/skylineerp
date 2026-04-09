@@ -68,6 +68,10 @@ const defaultForm = {
   unidadRotulada: 'sin_definir' as RotuladaOpcion,
   valorComercial: '',
   rentaMensual: '',
+  mulitaNominaOperadorMensual: '',
+  mulitaDieselMensual: '',
+  mulitaHorasExtrasMensual: '',
+  mulitaCasetasMensual: '',
   pendientePlacasMotivo: '' as '' | PendientePlacasMotivo,
   placaFederal: false,
   placaLocal: false,
@@ -306,6 +310,7 @@ export function Unidades() {
   const [filtro, setFiltro] = useState<Estatus | 'Todos'>('Todos');
   const [filtroSubestatus, setFiltroSubestatus] = useState<SubestatusDisponible | 'todos'>('todos');
   const [filtroUbicacion, setFiltroUbicacion] = useState<UbicacionDisponible | 'todos'>('todos');
+  const [filtroTipoUnidad, setFiltroTipoUnidad] = useState<TipoUnidadCatalogo | 'todos'>('todos');
   const [filtroCliente, setFiltroCliente] = useState('todos');
   const [filtroGps, setFiltroGps] = useState<'todos' | 'con_gps' | 'sin_gps'>('todos');
   const [filtroRotulada, setFiltroRotulada] = useState<'todos' | 'si' | 'no' | 'sin_definir'>('todos');
@@ -319,6 +324,7 @@ export function Unidades() {
     return (
       filtroSubestatus !== 'todos' ||
       filtroUbicacion !== 'todos' ||
+      filtroTipoUnidad !== 'todos' ||
       filtroCliente !== 'todos' ||
       filtroGps !== 'todos' ||
       filtroRotulada !== 'todos' ||
@@ -330,6 +336,7 @@ export function Unidades() {
   }, [
     filtroSubestatus,
     filtroUbicacion,
+    filtroTipoUnidad,
     filtroCliente,
     filtroGps,
     filtroRotulada,
@@ -350,6 +357,12 @@ export function Unidades() {
   const [modalEditar, setModalEditar] = useState(false);
   const [formEditar, setFormEditar] = useState(defaultForm);
   const [savingEditar, setSavingEditar] = useState(false);
+
+  const [panelMulitasOpen, setPanelMulitasOpen] = useState(false);
+  const [mulitaEdits, setMulitaEdits] = useState<
+    Record<string, { nomina: string; diesel: string; extras: string; casetas: string }>
+  >({});
+  const [mulitaSavingId, setMulitaSavingId] = useState<string | null>(null);
 
   const [damageDesc, setDamageDesc] = useState('');
   const [newDoc, setNewDoc] = useState<{ tipo: DocTipo; file: File | null }>({ tipo: 'Otro', file: null });
@@ -404,6 +417,8 @@ export function Unidades() {
         filtroSubestatus === 'todos' ? true : (u.subestatusDisponible ?? 'disponible') === filtroSubestatus;
       const byUbicacion =
         filtroUbicacion === 'todos' ? true : (u.ubicacionDisponible ?? 'lote') === filtroUbicacion;
+      const tipoUnidadActual = (u.tipoUnidad ?? 'remolque_seco') as TipoUnidadCatalogo;
+      const byTipoUnidad = filtroTipoUnidad === 'todos' ? true : tipoUnidadActual === filtroTipoUnidad;
       const cliente = (u.clienteEnRenta ?? '').trim();
       const byCliente = filtroCliente === 'todos' ? true : cliente.toLowerCase() === filtroCliente.toLowerCase();
       const serieBusqueda = esSeriePlaceholder(u.numeroSerieCaja) ? 'pendiente' : (u.numeroSerieCaja ?? '');
@@ -468,6 +483,7 @@ export function Unidades() {
         byFmAnterior &&
         byFmVigente &&
         byTarjeta &&
+        byTipoUnidad &&
         (shouldApplyDisponibleFilters ? bySubestatus && byUbicacion : true) &&
         (shouldApplyClienteFilter ? byCliente : true)
       );
@@ -477,6 +493,7 @@ export function Unidades() {
     filtro,
     filtroSubestatus,
     filtroUbicacion,
+    filtroTipoUnidad,
     filtroCliente,
     filtroGps,
     filtroRotulada,
@@ -496,6 +513,113 @@ export function Unidades() {
     }
     return [...set].sort((a, b) => a.localeCompare(b, 'es-MX'));
   }, [unidades]);
+
+  const unidadesMulitas = useMemo(
+    () => unidades.filter((u) => (u.tipoUnidad ?? 'remolque_seco') === 'maquinaria'),
+    [unidades]
+  );
+
+  const mulitasOrdenadas = useMemo(() => {
+    return [...unidadesMulitas].sort((a, b) =>
+      (a.numeroEconomico ?? '').localeCompare(b.numeroEconomico ?? '', 'es-MX', { numeric: true })
+    );
+  }, [unidadesMulitas]);
+
+  function totalMulitaMensualFila(u: UnidadRow): number | null {
+    const partes: Array<number | null | undefined> = [
+      u.mulitaNominaOperadorMensual,
+      u.mulitaDieselMensual,
+      u.mulitaHorasExtrasMensual,
+      u.mulitaCasetasMensual,
+    ];
+    if (partes.every((x) => x == null)) return null;
+    return partes.reduce((acc: number, x) => acc + Number(x ?? 0), 0);
+  }
+
+  function totalMulitaMensualDesdeForm(ed: {
+    nomina: string;
+    diesel: string;
+    extras: string;
+    casetas: string;
+  }): number | null {
+    let sum = 0;
+    for (const key of ['nomina', 'diesel', 'extras', 'casetas'] as const) {
+      const p = parseMontoUnidadInput(ed[key]);
+      if (!p.ok) return null;
+      if (p.value != null) sum += p.value;
+    }
+    return sum;
+  }
+
+  const totalGastosTodasMulitas = useMemo(() => {
+    if (!panelMulitasOpen) return null;
+    const totales = unidadesMulitas.map((u) => {
+      const ed = mulitaEdits[u.id];
+      if (!ed) return totalMulitaMensualFila(u);
+      return totalMulitaMensualDesdeForm(ed);
+    });
+    if (totales.some((x) => x === null)) return null;
+    const validos = totales.filter((x): x is number => x != null);
+    if (validos.length === 0) return null;
+    return validos.reduce((acc, x) => acc + x, 0);
+  }, [panelMulitasOpen, unidadesMulitas, mulitaEdits]);
+
+  function openPanelMulitas() {
+    const next: Record<string, { nomina: string; diesel: string; extras: string; casetas: string }> = {};
+    for (const u of unidadesMulitas) {
+      next[u.id] = {
+        nomina: u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
+        diesel: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
+        extras: u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
+        casetas: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
+      };
+    }
+    setMulitaEdits(next);
+    setPanelMulitasOpen(true);
+    setError(null);
+  }
+
+  function closePanelMulitas() {
+    if (mulitaSavingId) return;
+    setPanelMulitasOpen(false);
+  }
+
+  async function guardarGastosMulita(id: string) {
+    const ed = mulitaEdits[id];
+    if (!ed) return;
+    const pn = parseMontoUnidadInput(ed.nomina);
+    const pd = parseMontoUnidadInput(ed.diesel);
+    const pe = parseMontoUnidadInput(ed.extras);
+    const pc = parseMontoUnidadInput(ed.casetas);
+    if (!pn.ok || !pd.ok || !pe.ok || !pc.ok) {
+      toast('Revisa los importes mensuales (MXN).', 'error');
+      return;
+    }
+    setMulitaSavingId(id);
+    try {
+      const u = await updateUnidad(id, {
+        mulitaNominaOperadorMensual: pn.value,
+        mulitaDieselMensual: pd.value,
+        mulitaHorasExtrasMensual: pe.value,
+        mulitaCasetasMensual: pc.value,
+      });
+      setUnidades((prev) => prev.map((x) => (x.id === id ? u : x)));
+      setMulitaEdits((prev) => ({
+        ...prev,
+        [id]: {
+          nomina: u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
+          diesel: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
+          extras: u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
+          casetas: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
+        },
+      }));
+      toast('Gastos de mulita guardados.', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Error', 'error');
+    } finally {
+      setMulitaSavingId(null);
+    }
+  }
 
   function openDrawer(id: string, nextTab: Tab = 'expediente') {
     setSelectedId(id);
@@ -537,6 +661,12 @@ export function Unidades() {
       unidadRotulada: rotuladaApiToForm(u.unidadRotulada),
       valorComercial: u.valorComercial != null ? String(u.valorComercial) : '',
       rentaMensual: u.rentaMensual != null ? String(u.rentaMensual) : '',
+      mulitaNominaOperadorMensual:
+        u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
+      mulitaDieselMensual: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
+      mulitaHorasExtrasMensual:
+        u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
+      mulitaCasetasMensual: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
       pendientePlacasMotivo:
         u.pendientePlacasMotivo === 'baja_placas' || u.pendientePlacasMotivo === 'pendiente_importar'
           ? u.pendientePlacasMotivo
@@ -553,6 +683,10 @@ export function Unidades() {
     e.preventDefault();
     const vc = parseMontoUnidadInput(formNueva.valorComercial);
     const rm = parseMontoUnidadInput(formNueva.rentaMensual);
+    const mn = parseMontoUnidadInput(formNueva.mulitaNominaOperadorMensual);
+    const md = parseMontoUnidadInput(formNueva.mulitaDieselMensual);
+    const mh = parseMontoUnidadInput(formNueva.mulitaHorasExtrasMensual);
+    const mc = parseMontoUnidadInput(formNueva.mulitaCasetasMensual);
     if (!vc.ok) {
       setError(vc.message);
       toast(vc.message, 'error');
@@ -561,6 +695,12 @@ export function Unidades() {
     if (!rm.ok) {
       setError(rm.message);
       toast(rm.message, 'error');
+      return;
+    }
+    if (!mn.ok || !md.ok || !mh.ok || !mc.ok) {
+      const msg = 'Revisa los importes de gastos de operación para mulita.';
+      setError(msg);
+      toast(msg, 'error');
       return;
     }
     if (
@@ -593,6 +733,10 @@ export function Unidades() {
       unidadRotulada: rotuladaFormToApi(formNueva.unidadRotulada),
       valorComercial: vc.value,
       rentaMensual: rm.value,
+      mulitaNominaOperadorMensual: mn.value,
+      mulitaDieselMensual: md.value,
+      mulitaHorasExtrasMensual: mh.value,
+      mulitaCasetasMensual: mc.value,
       pendientePlacasMotivo:
         formNueva.estatus === 'Disponible' && formNueva.subestatusDisponible === 'pendiente_placas'
           ? formNueva.pendientePlacasMotivo || null
@@ -638,6 +782,10 @@ export function Unidades() {
     if (!selectedId) return;
     const vc = parseMontoUnidadInput(formEditar.valorComercial);
     const rm = parseMontoUnidadInput(formEditar.rentaMensual);
+    const mn = parseMontoUnidadInput(formEditar.mulitaNominaOperadorMensual);
+    const md = parseMontoUnidadInput(formEditar.mulitaDieselMensual);
+    const mh = parseMontoUnidadInput(formEditar.mulitaHorasExtrasMensual);
+    const mc = parseMontoUnidadInput(formEditar.mulitaCasetasMensual);
     if (!vc.ok) {
       setError(vc.message);
       toast(vc.message, 'error');
@@ -646,6 +794,12 @@ export function Unidades() {
     if (!rm.ok) {
       setError(rm.message);
       toast(rm.message, 'error');
+      return;
+    }
+    if (!mn.ok || !md.ok || !mh.ok || !mc.ok) {
+      const msg = 'Revisa los importes de gastos de operación para mulita.';
+      setError(msg);
+      toast(msg, 'error');
       return;
     }
     if (
@@ -678,6 +832,10 @@ export function Unidades() {
       unidadRotulada: rotuladaFormToApi(formEditar.unidadRotulada),
       valorComercial: vc.value,
       rentaMensual: rm.value,
+      mulitaNominaOperadorMensual: mn.value,
+      mulitaDieselMensual: md.value,
+      mulitaHorasExtrasMensual: mh.value,
+      mulitaCasetasMensual: mc.value,
       pendientePlacasMotivo:
         formEditar.estatus === 'Disponible' && formEditar.subestatusDisponible === 'pendiente_placas'
           ? formEditar.pendientePlacasMotivo || null
@@ -865,13 +1023,200 @@ export function Unidades() {
             Administra inventario, expedientes, documentos y estatus en tiempo real.
           </p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={openNueva}>
-          <Icon icon="mdi:plus" className="size-5" aria-hidden />
-          Nueva unidad
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={`btn inline-flex items-center gap-2 ${panelMulitasOpen ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => (panelMulitasOpen ? closePanelMulitas() : openPanelMulitas())}
+          >
+            <Icon icon={panelMulitasOpen ? 'mdi:chevron-up' : 'mdi:forklift'} className="size-5" aria-hidden />
+            {panelMulitasOpen ? 'Ocultar mulitas' : 'Unidades Mulitas'}
+          </button>
+          <button type="button" className="btn btn-primary inline-flex items-center gap-2" onClick={openNueva}>
+            <Icon icon="mdi:plus" className="size-5" aria-hidden />
+            Nueva unidad
+          </button>
+        </div>
       </header>
 
       {error && <div className={CRUD_ERROR_BANNER}>{error}</div>}
+
+      {/* Gastos mulitas: solo bloque informativo y debajo el CRUD (sin modal) */}
+      {panelMulitasOpen && (
+        <section
+          className="mb-6 overflow-hidden rounded-xl border border-skyline-border bg-white shadow-sm"
+          aria-labelledby="mulitas-gastos-heading"
+        >
+          <div className="border-b border-skyline-border bg-slate-50/90 px-5 py-4 sm:px-6">
+            <h2 id="mulitas-gastos-heading" className="text-lg font-semibold text-gray-900">
+              Unidades Mulitas · gastos de operación (mensual)
+            </h2>
+            <p className="mt-1.5 text-sm text-gray-600">
+              Puedes editar aquí los montos mensuales por unidad. Si la unidad tiene renta con operador, aquí verás
+              el operador vinculado.
+            </p>
+          </div>
+
+          <div className="px-4 pb-2 pt-4 sm:px-6 sm:pt-5">
+            {mulitasOrdenadas.length === 0 ? (
+              <p className="py-8 text-center text-sm text-gray-500">
+                No hay unidades con tipo Mulita. Registra una unidad y elige «Mulita» en tipo de unidad, o edita una
+                existente.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-skyline-border">
+                <table className="min-w-[72rem] w-full divide-y divide-skyline-border text-sm">
+                  <thead>
+                    <tr className={CRUD_THEAD_TR}>
+                      <CrudTableTh className="whitespace-nowrap px-3 py-3 align-middle" icon="mdi:tag-outline">No. econ.</CrudTableTh>
+                      <CrudTableTh className="whitespace-nowrap px-3 py-3 align-middle" icon="mdi:card-outline">Placas</CrudTableTh>
+                      <CrudTableTh className="min-w-[8rem] whitespace-nowrap px-3 py-3 align-middle" icon="mdi:car-outline">Marca / modelo</CrudTableTh>
+                      <CrudTableTh className="min-w-[10rem] whitespace-nowrap px-2 py-3 align-middle" icon="mdi:account-hard-hat-outline">
+                        Operador vinculado
+                      </CrudTableTh>
+                      <CrudTableTh className="min-w-[9rem] whitespace-nowrap px-2 py-3 align-middle" icon="mdi:key-chain-variant">
+                        Renta vinculada
+                      </CrudTableTh>
+                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:cash">
+                        Nómina operador
+                      </CrudTableTh>
+                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:gas-station-outline">Diésel</CrudTableTh>
+                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:clock-outline">
+                        Horas extras
+                      </CrudTableTh>
+                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:road-variant">
+                        Casetas
+                      </CrudTableTh>
+                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle text-right" icon="mdi:calendar-month-outline">
+                        Total / mes
+                      </CrudTableTh>
+                      <CrudTableTh className="w-[1%] whitespace-nowrap px-3 py-3 align-middle" icon="mdi:content-save-outline">
+                        Acción
+                      </CrudTableTh>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-skyline-border bg-white">
+                    {mulitasOrdenadas.map((u) => {
+                      const ed = mulitaEdits[u.id] ?? {
+                        nomina: u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
+                        diesel: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
+                        extras: u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
+                        casetas: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
+                      };
+                      const filaTotal = totalMulitaMensualDesdeForm(ed);
+                      const operador = (u.operadorEnRenta ?? '').trim();
+                      const cliente = (u.clienteEnRenta ?? '').trim();
+                      const inputCls =
+                        'w-full min-w-[6rem] rounded-md border border-skyline-border px-2 py-1.5 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue';
+                      return (
+                        <tr key={u.id} className="hover:bg-gray-50/60">
+                          <td className="whitespace-nowrap px-3 py-2 text-center font-medium text-gray-900">
+                            {u.numeroEconomico ?? '—'}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 text-center text-gray-800">{u.placas}</td>
+                          <td className="px-3 py-2 text-center text-gray-700">
+                            {u.marca} {u.modelo}
+                          </td>
+                          <td className="px-2 py-2 text-center">
+                            <span className="inline-block text-sm font-medium text-slate-700">{operador || 'Aun no'}</span>
+                          </td>
+                          <td className="px-2 py-2 text-center">
+                            <span className="inline-block text-sm font-medium text-slate-700">{cliente || 'Aun no'}</span>
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className={inputCls}
+                              placeholder="MXN"
+                              value={ed.nomina}
+                              onChange={(e) =>
+                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, nomina: e.target.value } }))
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className={inputCls}
+                              placeholder="MXN"
+                              value={ed.diesel}
+                              onChange={(e) =>
+                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, diesel: e.target.value } }))
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className={inputCls}
+                              placeholder="MXN"
+                              value={ed.extras}
+                              onChange={(e) =>
+                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, extras: e.target.value } }))
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              className={inputCls}
+                              placeholder="MXN"
+                              value={ed.casetas}
+                              onChange={(e) =>
+                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, casetas: e.target.value } }))
+                              }
+                            />
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-2 text-center font-medium text-gray-900">
+                            {filaTotal === null ? '—' : textoMontoUnidadTabla(filaTotal)}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2 text-center">
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              disabled={mulitaSavingId !== null}
+                              onClick={() => guardarGastosMulita(u.id)}
+                            >
+                              {mulitaSavingId === u.id ? '…' : 'Guardar'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-skyline-border bg-gray-50/80 px-5 py-3 sm:px-6">
+            <p className="text-sm text-gray-600">
+              {unidadesMulitas.length > 0 && totalGastosTodasMulitas !== null ? (
+                <>
+                  <span className="font-medium text-gray-800">Suma todas las mulitas:</span>{' '}
+                  <span className="font-semibold text-gray-900">
+                    {textoMontoUnidadTabla(totalGastosTodasMulitas)}
+                  </span>
+                </>
+              ) : unidadesMulitas.length > 0 ? (
+                <span>Aun no hay gastos capturados para mostrar suma.</span>
+              ) : null}
+            </p>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              disabled={mulitaSavingId !== null}
+              onClick={closePanelMulitas}
+            >
+              Ocultar
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Toolbar — compacto; filtros detallados en panel plegable */}
       <div className={CRUD_TOOLBAR}>
@@ -964,6 +1309,21 @@ export function Unidades() {
                 {(Object.keys(UBICACION_LABEL) as UbicacionDisponible[]).map((k) => (
                   <option key={k} value={k}>
                     {UBICACION_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-gray-600">
+              Tipo unidad
+              <select
+                value={filtroTipoUnidad}
+                onChange={(e) => setFiltroTipoUnidad(e.target.value as TipoUnidadCatalogo | 'todos')}
+                className="mt-0.5 w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-xs text-gray-900 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+              >
+                <option value="todos">Todas</option>
+                {TIPOS_UNIDAD_OPCIONES.map((t) => (
+                  <option key={t.v} value={t.v}>
+                    {t.l}
                   </option>
                 ))}
               </select>
@@ -1391,6 +1751,59 @@ export function Unidades() {
                   />
                 </label>
               </div>
+              {formNueva.tipoUnidad === 'maquinaria' ? (
+                <div className="rounded-lg border border-skyline-border bg-slate-50/70 p-3 md:col-span-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Gastos operacion mulita (captura aparte)
+                  </p>
+                  <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Nomina operador (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formNueva.mulitaNominaOperadorMensual}
+                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaNominaOperadorMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Diesel (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formNueva.mulitaDieselMensual}
+                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaDieselMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Horas extras (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formNueva.mulitaHorasExtrasMensual}
+                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaHorasExtrasMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Casetas (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formNueva.mulitaCasetasMensual}
+                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaCasetasMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : null}
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                 Estatus
                 <select
@@ -1700,6 +2113,59 @@ export function Unidades() {
                   />
                 </label>
               </div>
+              {formEditar.tipoUnidad === 'maquinaria' ? (
+                <div className="rounded-lg border border-skyline-border bg-slate-50/70 p-3 md:col-span-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Gastos operacion mulita (captura aparte)
+                  </p>
+                  <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Nomina operador (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formEditar.mulitaNominaOperadorMensual}
+                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaNominaOperadorMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Diesel (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formEditar.mulitaDieselMensual}
+                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaDieselMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Horas extras (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formEditar.mulitaHorasExtrasMensual}
+                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaHorasExtrasMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
+                      Casetas (MXN)
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formEditar.mulitaCasetasMensual}
+                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaCasetasMensual: e.target.value }))}
+                        placeholder="Opcional"
+                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : null}
               <div className="md:col-span-2">
                 <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                   Placas *

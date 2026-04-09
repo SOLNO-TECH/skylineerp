@@ -530,12 +530,20 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
     pendientePlacasMotivo: pendientePlacasMotivoBody,
     placaFederal: placaFederalBody,
     placaLocal: placaLocalBody,
+    mulitaNominaOperadorMensual: mulitaNominaBody,
+    mulitaDieselMensual: mulitaDieselBody,
+    mulitaHorasExtrasMensual: mulitaHorasBody,
+    mulitaCasetasMensual: mulitaCasetasBody,
   } = body;
   const valorComercial = valorComercialBody ?? body.valor_comercial;
   const rentaMensual = rentaMensualBody ?? body.renta_mensual;
   const pendientePlacasMotivo = pendientePlacasMotivoBody ?? body.pendiente_placas_motivo;
   const placaFederal = placaFederalBody ?? body.placa_federal;
   const placaLocal = placaLocalBody ?? body.placa_local;
+  const mulitaNominaOperadorMensual = mulitaNominaBody ?? body.mulita_nomina_operador_mensual;
+  const mulitaDieselMensual = mulitaDieselBody ?? body.mulita_diesel_mensual;
+  const mulitaHorasExtrasMensual = mulitaHorasBody ?? body.mulita_horas_extras_mensual;
+  const mulitaCasetasMensual = mulitaCasetasBody ?? body.mulita_casetas_mensual;
   const numeroSerieCaja = pickNumeroSerieCaja(body);
   if (!placas || !marca || !modelo) {
     return res.status(400).json({ error: 'Placas, marca y modelo son requeridos' });
@@ -588,6 +596,10 @@ app.post('/api/unidades', requireAuth, requireEdicionFlota, (req, res) => {
         pendientePlacasMotivo,
         placaFederal,
         placaLocal,
+        mulitaNominaOperadorMensual,
+        mulitaDieselMensual,
+        mulitaHorasExtrasMensual,
+        mulitaCasetasMensual,
       },
       req.user.id
     );
@@ -636,12 +648,20 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
     pendientePlacasMotivo: pendientePlacasMotivoBodyPut,
     placaFederal: placaFederalBodyPut,
     placaLocal: placaLocalBodyPut,
+    mulitaNominaOperadorMensual: mulitaNominaPut,
+    mulitaDieselMensual: mulitaDieselPut,
+    mulitaHorasExtrasMensual: mulitaHorasPut,
+    mulitaCasetasMensual: mulitaCasetasPut,
   } = body;
   const valorComercial = valorComercialBodyPut ?? body.valor_comercial;
   const rentaMensual = rentaMensualBodyPut ?? body.renta_mensual;
   const pendientePlacasMotivo = pendientePlacasMotivoBodyPut ?? body.pendiente_placas_motivo;
   const placaFederal = placaFederalBodyPut ?? body.placa_federal;
   const placaLocal = placaLocalBodyPut ?? body.placa_local;
+  const mulitaNominaOperadorMensual = mulitaNominaPut ?? body.mulita_nomina_operador_mensual;
+  const mulitaDieselMensual = mulitaDieselPut ?? body.mulita_diesel_mensual;
+  const mulitaHorasExtrasMensual = mulitaHorasPut ?? body.mulita_horas_extras_mensual;
+  const mulitaCasetasMensual = mulitaCasetasPut ?? body.mulita_casetas_mensual;
   const numeroSeriePicked = pickNumeroSerieCaja(body);
   const numeroSerieCaja = numeroSeriePicked !== undefined ? numeroSeriePicked : undefined;
   if (placas != null && existePlacas(placas, Number(id))) {
@@ -660,36 +680,45 @@ app.put('/api/unidades/:id', requireAuth, requireEdicionFlota, (req, res) => {
     return res.status(400).json({ error: 'El número de serie de la caja no puede estar vacío' });
   }
   try {
-    const updated = updateUnidadDb(
-      id,
-      {
-        placas,
-        marca,
-        modelo,
-        estatus,
-        numeroSerieCaja,
-        numeroEconomico,
-        subestatusDisponible,
-        ubicacionDisponible,
-        kilometraje,
-        combustiblePct,
-        observaciones,
-        tipoUnidad,
-        estadoMantenimiento,
-        horasMotor,
-        tieneGps,
-        gpsNumero1,
-        gpsNumero2,
-        gestorFisicoMecanica,
-        unidadRotulada,
-        valorComercial,
-        rentaMensual,
-        pendientePlacasMotivo,
-        placaFederal,
-        placaLocal,
-      },
-      req.user.id
-    );
+    const patch = {
+      placas,
+      marca,
+      modelo,
+      estatus,
+      numeroSerieCaja,
+      numeroEconomico,
+      subestatusDisponible,
+      ubicacionDisponible,
+      kilometraje,
+      combustiblePct,
+      observaciones,
+      tipoUnidad,
+      estadoMantenimiento,
+      horasMotor,
+      tieneGps,
+      gpsNumero1,
+      gpsNumero2,
+      gestorFisicoMecanica,
+      unidadRotulada,
+      valorComercial,
+      rentaMensual,
+      pendientePlacasMotivo,
+      placaFederal,
+      placaLocal,
+    };
+    if (mulitaNominaOperadorMensual !== undefined) {
+      patch.mulitaNominaOperadorMensual = mulitaNominaOperadorMensual;
+    }
+    if (mulitaDieselMensual !== undefined) {
+      patch.mulitaDieselMensual = mulitaDieselMensual;
+    }
+    if (mulitaHorasExtrasMensual !== undefined) {
+      patch.mulitaHorasExtrasMensual = mulitaHorasExtrasMensual;
+    }
+    if (mulitaCasetasMensual !== undefined) {
+      patch.mulitaCasetasMensual = mulitaCasetasMensual;
+    }
+    const updated = updateUnidadDb(id, patch, req.user.id);
     if (!updated) return res.status(400).json({ error: 'Datos inválidos para actualizar unidad' });
     res.json({ unidad: updated });
   } catch (err) {

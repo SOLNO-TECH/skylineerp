@@ -573,7 +573,7 @@ export async function getReporteProveedoresPorUnidadApi(): Promise<ReportePorUni
   return data.unidades ?? [];
 }
 
-export type FinanzasGastoMovimientoTipo = 'mantenimiento' | 'factura_proveedor' | 'pago_proveedor';
+export type FinanzasGastoMovimientoTipo = 'mantenimiento' | 'operacion_mulita' | 'factura_proveedor' | 'pago_proveedor';
 
 export type FinanzasGastoMovimiento = {
   tipo: FinanzasGastoMovimientoTipo;
@@ -590,6 +590,7 @@ export type FinanzasGastoMovimiento = {
 export type FinanzasGastosResumen = {
   totales: {
     mantenimiento: number;
+    operacionMulitas: number;
     proveedoresFacturado: number;
     proveedoresPagado: number;
     proveedoresSaldo: number;
@@ -624,6 +625,7 @@ export type UnidadRow = {
   subestatusDisponible?: 'disponible' | 'taller' | 'almacen_exclusivo' | 'pendiente_placas';
   ubicacionDisponible?: 'lote' | 'patio';
   clienteEnRenta?: string;
+  operadorEnRenta?: string;
   kilometraje: number;
   combustiblePct: number;
   observaciones: string;
@@ -646,6 +648,11 @@ export type UnidadRow = {
   pendientePlacasMotivo?: 'baja_placas' | 'pendiente_importar' | null;
   placaFederal?: boolean;
   placaLocal?: boolean;
+  /** Gastos operación mensuales (MXN) para tipo Mulita (`maquinaria`). */
+  mulitaNominaOperadorMensual?: number | null;
+  mulitaDieselMensual?: number | null;
+  mulitaHorasExtrasMensual?: number | null;
+  mulitaCasetasMensual?: number | null;
   documentos: UnidadDoc[];
   actividad: UnidadAct[];
   imagenes?: UnidadImg[];
@@ -691,6 +698,10 @@ export async function createUnidad(p: {
   pendientePlacasMotivo?: 'baja_placas' | 'pendiente_importar' | null;
   placaFederal?: boolean;
   placaLocal?: boolean;
+  mulitaNominaOperadorMensual?: number | null;
+  mulitaDieselMensual?: number | null;
+  mulitaHorasExtrasMensual?: number | null;
+  mulitaCasetasMensual?: number | null;
 }): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades`, {
     method: 'POST',
@@ -728,6 +739,10 @@ export async function updateUnidad(
     pendientePlacasMotivo: 'baja_placas' | 'pendiente_importar' | null;
     placaFederal: boolean;
     placaLocal: boolean;
+    mulitaNominaOperadorMensual: number | null;
+    mulitaDieselMensual: number | null;
+    mulitaHorasExtrasMensual: number | null;
+    mulitaCasetasMensual: number | null;
   }>
 ): Promise<UnidadRow> {
   const res = await fetchWithAuth(`${API_BASE}/unidades/${id}`, {

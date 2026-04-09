@@ -21,6 +21,7 @@ const HOJAS = [
     sql: `SELECT id, placas, marca, modelo, numero_serie_caja, estatus, subestatus_disponible, ubicacion_disponible,
                  tipo_unidad, estado_mantenimiento, horas_motor, kilometraje, combustible_pct, observaciones,
                  valor_comercial, renta_mensual, pendiente_placas_motivo, placa_federal, placa_local,
+                 mulita_nomina_operador_mensual, mulita_diesel_mensual, mulita_horas_extras_mensual, mulita_casetas_mensual,
                  activo, creado_en, actualizado_en
           FROM unidades ORDER BY id`,
     dateColumns: ['creado_en', 'actualizado_en'],

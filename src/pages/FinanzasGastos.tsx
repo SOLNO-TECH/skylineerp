@@ -58,6 +58,12 @@ const TIPO_META: Record<
     color: 'bg-violet-100 text-violet-900',
     icon: 'mdi:wrench',
   },
+  operacion_mulita: {
+    label: 'Operación mulita',
+    short: 'Mulita',
+    color: 'bg-indigo-100 text-indigo-900',
+    icon: 'mdi:forklift',
+  },
   factura_proveedor: {
     label: 'Factura proveedor',
     short: 'Factura',
@@ -135,7 +141,7 @@ export function FinanzasGastos() {
           <h1 className={CRUD_PAGE_TITLE}>Gastos</h1>
           <p className={CRUD_PAGE_SUBTITLE}>
             Control de egresos y compromisos según lo registrado en el ERP: costos de mantenimiento de flota, facturas de
-            proveedores y pagos aplicados a esas facturas.
+            proveedores, operación de mulitas y pagos aplicados a esas facturas.
           </p>
         </div>
       </header>
@@ -145,7 +151,8 @@ export function FinanzasGastos() {
           <Icon icon="mdi:information-outline" className="mt-0.5 size-5 shrink-0 text-skyline-blue" aria-hidden />
           <span>
             <strong className="font-semibold text-slate-900">Cómo leer los importes:</strong> el total de{' '}
-            <em>mantenimiento</em> es la suma de costos capturados en el módulo de mantenimiento. En proveedores,{' '}
+            <em>mantenimiento</em> es la suma de costos capturados en el módulo de mantenimiento;{' '}
+            <em> operación mulitas</em> suma nómina operador, diésel, horas extras y casetas por unidad mulita. En proveedores,{' '}
             <em>facturado</em> es el monto de facturas activas; <em>pagado</em>, lo abonado; <em>saldo</em>, la diferencia
             (cuentas por pagar). En la tabla, una misma operación puede aparecer como factura y luego como uno o más pagos:
             no sumes ambos como “doble gasto” en un mismo análisis de caja.
@@ -161,16 +168,20 @@ export function FinanzasGastos() {
         <p className="text-sm text-red-600">{error}</p>
       ) : (
         <>
-          <section
-            className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"
-            aria-label="Resumen de gastos"
-          >
+          <section className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Resumen de gastos">
             <div className="rounded-xl border border-skyline-border bg-white p-4 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-wide text-skyline-muted">Mantenimiento</p>
               <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900">
                 ${(tot?.mantenimiento ?? 0).toLocaleString('es-MX')}
               </p>
               <p className="mt-1 text-xs text-gray-500">Suma de costos en órdenes de mantenimiento</p>
+            </div>
+            <div className="rounded-xl border border-skyline-border bg-white p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-skyline-muted">Operación mulitas</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-indigo-900">
+                ${(tot?.operacionMulitas ?? 0).toLocaleString('es-MX')}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">Nómina, diésel, horas extras y casetas de mulitas</p>
             </div>
             <div className="rounded-xl border border-skyline-border bg-white p-4 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-wide text-skyline-muted">Proveedores facturado</p>
@@ -232,6 +243,7 @@ export function FinanzasGastos() {
                 >
                   <option value="todos">Todos</option>
                   <option value="mantenimiento">Mantenimiento</option>
+                  <option value="operacion_mulita">Operación mulitas</option>
                   <option value="factura_proveedor">Facturas proveedor</option>
                   <option value="pago_proveedor">Pagos a proveedor</option>
                 </select>
