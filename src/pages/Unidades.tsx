@@ -39,7 +39,19 @@ import {
   getMulitaGastosSemanaApi,
   getMulitaGastosHistorialUnidadApi,
   upsertMulitaGastoSemanaApi,
+  getMulitaGastosMantenimientoUnidadApi,
+  createMulitaGastoMantenimientoApi,
+  deleteMulitaGastoMantenimientoApi,
+  getMulitaEvidenciasApi,
+  uploadMulitaEvidenciaApi,
+  deleteMulitaEvidenciaApi,
+  getMantenimientosUnidad,
   type MulitaGastoSemanalRow,
+  type MulitaGastoMantenimientoRow,
+  type MulitaEvidenciaRow,
+  type MulitaExtraOperacionLinea,
+  type MulitaHorasExtraLinea,
+  type MantenimientoRow,
   type UnidadRow,
   type UnidadExpedienteFotoSlot,
 } from '../api/client';
@@ -72,10 +84,6 @@ const defaultForm = {
   unidadRotulada: 'sin_definir' as RotuladaOpcion,
   valorComercial: '',
   rentaMensual: '',
-  mulitaNominaOperadorMensual: '',
-  mulitaDieselMensual: '',
-  mulitaHorasExtrasMensual: '',
-  mulitaCasetasMensual: '',
   pendientePlacasMotivo: '' as '' | PendientePlacasMotivo,
   placaFederal: false,
   placaLocal: false,
@@ -136,6 +144,249 @@ function moverDiasISO(iso: string, dias: number): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${dd}`;
+}
+
+/** Lunes a domingo de la semana de gasto (etiquetas cortas). */
+function diasSemanaMulitaDesdeLunes(lunesISO: string): { iso: string; label: string }[] {
+  const labels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'] as const;
+  return labels.map((label, i) => ({ iso: moverDiasISO(lunesISO, i), label }));
+}
+
+function resumenFaltasMulitaHistorial(faltas: string[] | undefined): string {
+  if (!faltas?.length) return 'Ninguna';
+  const sorted = [...faltas].sort();
+  return sorted.map((d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`).join(', ');
+}
+
+type MulitaLineaHorasExtraForm = { fecha: string; horas: string; precioPorHora: string };
+
+function nuevaLineaHorasExtra(fechaDefault: string): MulitaLineaHorasExtraForm {
+  return { fecha: fechaDefault, horas: '', precioPorHora: '' };
+}
+
+function horasExtrasLineasFormDesdeApi(r: MulitaGastoSemanalRow, lunesSemana: string): MulitaLineaHorasExtraForm[] {
+  if (r.horasExtrasLineas?.length) {
+    return r.horasExtrasLineas.map((x) => ({
+      fecha: x.fecha,
+      horas: String(x.horas),
+      precioPorHora: String(x.precioPorHora),
+    }));
+  }
+  if (r.horasExtras != null && r.horasExtras > 0) {
+    return [{ fecha: lunesSemana, horas: '1', precioPorHora: String(r.horasExtras) }];
+  }
+  return [nuevaLineaHorasExtra(lunesSemana)];
+}
+
+function diasIsoSemanaDesdeLunes(lunesISO: string): string[] {
+  return diasSemanaMulitaDesdeLunes(lunesISO).map((d) => d.iso);
+}
+
+function validarYLineasHorasExtrasApi(
+  lineas: MulitaLineaHorasExtraForm[],
+  lunesSemana: string
+): { ok: false; message: string } | { ok: true; payload: MulitaHorasExtraLinea[] } {
+  const permitidos = new Set(diasIsoSemanaDesdeLunes(lunesSemana));
+  const payload: MulitaHorasExtraLinea[] = [];
+  for (const ln of lineas) {
+    const fecha = ln.fecha.trim();
+    const ht = ln.horas.trim().replace(/,/g, '.');
+    const ph = ln.precioPorHora.trim();
+    if (!fecha && !ht && !ph) continue;
+    if (!fecha || !permitidos.has(fecha)) {
+      return {
+        ok: false,
+        message: 'Horas extras: cada línea con datos debe tener una fecha de la semana seleccionada (lun–dom).',
+      };
+    }
+    const horas = parseFloat(ht);
+    if (!Number.isFinite(horas) || horas <= 0) {
+      return { ok: false, message: 'Horas extras: indica un número de horas mayor a 0.' };
+    }
+    const pm = parseMontoUnidadInput(ln.precioPorHora);
+    if (!pm.ok || pm.value == null) {
+      return { ok: false, message: 'Horas extras: indica un precio por hora válido (MXN).' };
+    }
+    payload.push({ fecha, horas, precioPorHora: pm.value });
+  }
+  return { ok: true, payload };
+}
+
+function sumaHorasExtrasMxnPreview(lineas: MulitaLineaHorasExtraForm[], lunesSemana: string): number | null {
+  const v = validarYLineasHorasExtrasApi(lineas, lunesSemana);
+  if (!v.ok) return null;
+  let s = 0;
+  for (const x of v.payload) {
+    s += x.horas * x.precioPorHora;
+  }
+  return Math.round(s * 100) / 100;
+}
+
+function textoResumenHorasExtrasHistorial(r: MulitaGastoSemanalRow): string {
+  const lineas = r.horasExtrasLineas ?? [];
+  if (!lineas.length) return '—';
+  return lineas
+    .map(
+      (l) =>
+        `${l.fecha.slice(8, 10)}/${l.fecha.slice(5, 7)}: ${l.horas}h × ${l.precioPorHora.toLocaleString('es-MX', { maximumFractionDigits: 2 })}`
+    )
+    .join(' · ');
+}
+
+type MulitaLineaExtrasOpForm = { fecha: string; concepto: string; cantidad: string };
+
+function nuevaLineaExtrasOp(fechaDefault: string): MulitaLineaExtrasOpForm {
+  return { fecha: fechaDefault, concepto: '', cantidad: '' };
+}
+
+type MulitaSemanalEd = {
+  nomina: string;
+  horasExtrasLineas: MulitaLineaHorasExtraForm[];
+  extrasOperacionesLineas: MulitaLineaExtrasOpForm[];
+  gastosFijosLineas: MulitaLineaExtrasOpForm[];
+  diesel: string;
+  bonoPuntualidad: string;
+  faltasDias: string[];
+};
+
+function defaultMulitaSemanalEd(lunesSemana: string): MulitaSemanalEd {
+  return {
+    nomina: '',
+    horasExtrasLineas: [nuevaLineaHorasExtra(lunesSemana)],
+    extrasOperacionesLineas: [nuevaLineaExtrasOp(lunesSemana)],
+    gastosFijosLineas: [nuevaLineaExtrasOp(lunesSemana)],
+    diesel: '',
+    bonoPuntualidad: '',
+    faltasDias: [],
+  };
+}
+
+/** Tabla compacta mulitas + drawer: operador/cliente sin renta vinculada. */
+const MULITA_TEXTO_SIN_OPERADOR_CLIENTE = 'Aún no tiene vinculado uno';
+
+function extrasOperacionesLineasFormDesdeApi(r: MulitaGastoSemanalRow, lunesSemana: string): MulitaLineaExtrasOpForm[] {
+  if (r.extrasOperacionesLineas?.length) {
+    return r.extrasOperacionesLineas.map((x) => ({
+      fecha: x.fecha,
+      concepto: x.concepto,
+      cantidad: String(x.cantidad),
+    }));
+  }
+  return [nuevaLineaExtrasOp(lunesSemana)];
+}
+
+function gastosFijosLineasFormDesdeApi(r: MulitaGastoSemanalRow, lunesSemana: string): MulitaLineaExtrasOpForm[] {
+  if (r.gastosFijosLineas?.length) {
+    return r.gastosFijosLineas.map((x) => ({
+      fecha: x.fecha,
+      concepto: x.concepto,
+      cantidad: String(x.cantidad),
+    }));
+  }
+  if (r.gastosFijosMonto != null && r.gastosFijosMonto > 0) {
+    return [{ fecha: lunesSemana, concepto: 'Importe previo', cantidad: String(r.gastosFijosMonto) }];
+  }
+  return [nuevaLineaExtrasOp(lunesSemana)];
+}
+
+function validarYExtrasOperacionesApi(
+  lineas: MulitaLineaExtrasOpForm[],
+  lunesSemana: string
+): { ok: false; message: string } | { ok: true; payload: MulitaExtraOperacionLinea[] } {
+  const permitidos = new Set(diasIsoSemanaDesdeLunes(lunesSemana));
+  const payload: MulitaExtraOperacionLinea[] = [];
+  for (const ln of lineas) {
+    const fecha = ln.fecha.trim();
+    const concepto = ln.concepto.trim().slice(0, 200);
+    const ct = ln.cantidad.trim();
+    if (!fecha && !concepto && !ct) continue;
+    if (!fecha || !permitidos.has(fecha)) {
+      return {
+        ok: false,
+        message: 'Extras operaciones: cada línea con datos debe tener fecha de la semana (lun–dom).',
+      };
+    }
+    if (!concepto) {
+      return { ok: false, message: 'Extras operaciones: indica el concepto en cada línea con importe.' };
+    }
+    const pm = parseMontoUnidadInput(ln.cantidad);
+    if (!pm.ok || pm.value == null) {
+      return { ok: false, message: 'Extras operaciones: indica cantidad (MXN) válida en cada línea.' };
+    }
+    payload.push({ fecha, concepto, cantidad: pm.value });
+  }
+  return { ok: true, payload };
+}
+
+function sumaExtrasOperacionesPreview(lineas: MulitaLineaExtrasOpForm[], lunesSemana: string): number | null {
+  const v = validarYExtrasOperacionesApi(lineas, lunesSemana);
+  if (!v.ok) return null;
+  let s = 0;
+  for (const x of v.payload) {
+    s += x.cantidad;
+  }
+  return Math.round(s * 100) / 100;
+}
+
+function validarYGastosFijosApi(
+  lineas: MulitaLineaExtrasOpForm[],
+  lunesSemana: string
+): { ok: false; message: string } | { ok: true; payload: MulitaExtraOperacionLinea[] } {
+  const permitidos = new Set(diasIsoSemanaDesdeLunes(lunesSemana));
+  const payload: MulitaExtraOperacionLinea[] = [];
+  for (const ln of lineas) {
+    const fecha = ln.fecha.trim();
+    const concepto = ln.concepto.trim().slice(0, 200);
+    const ct = ln.cantidad.trim();
+    if (!fecha && !concepto && !ct) continue;
+    if (!fecha || !permitidos.has(fecha)) {
+      return {
+        ok: false,
+        message: 'Gastos fijos: cada línea con datos debe tener fecha de la semana (lun–dom).',
+      };
+    }
+    if (!concepto) {
+      return { ok: false, message: 'Gastos fijos: indica el concepto en cada línea con importe.' };
+    }
+    const pm = parseMontoUnidadInput(ln.cantidad);
+    if (!pm.ok || pm.value == null) {
+      return { ok: false, message: 'Gastos fijos: indica cantidad (MXN) válida en cada línea.' };
+    }
+    payload.push({ fecha, concepto, cantidad: pm.value });
+  }
+  return { ok: true, payload };
+}
+
+function sumaGastosFijosPreview(lineas: MulitaLineaExtrasOpForm[], lunesSemana: string): number | null {
+  const v = validarYGastosFijosApi(lineas, lunesSemana);
+  if (!v.ok) return null;
+  let s = 0;
+  for (const x of v.payload) {
+    s += x.cantidad;
+  }
+  return Math.round(s * 100) / 100;
+}
+
+function textoResumenExtrasOpHistorial(r: MulitaGastoSemanalRow): string {
+  const lineas = r.extrasOperacionesLineas ?? [];
+  if (!lineas.length) return '—';
+  return lineas
+    .map(
+      (l) =>
+        `${l.fecha.slice(8, 10)}/${l.fecha.slice(5, 7)}: ${l.concepto.slice(0, 24)}${l.concepto.length > 24 ? '…' : ''} · $${l.cantidad.toLocaleString('es-MX', { maximumFractionDigits: 2 })}`
+    )
+    .join(' · ');
+}
+
+function textoResumenGastosFijosHistorial(r: MulitaGastoSemanalRow): string {
+  const lineas = r.gastosFijosLineas ?? [];
+  if (!lineas.length) return '—';
+  return lineas
+    .map(
+      (l) =>
+        `${l.fecha.slice(8, 10)}/${l.fecha.slice(5, 7)}: ${l.concepto.slice(0, 24)}${l.concepto.length > 24 ? '…' : ''} · $${l.cantidad.toLocaleString('es-MX', { maximumFractionDigits: 2 })}`
+    )
+    .join(' · ');
 }
 
 const EXPEDIENTE_FOTO_LABELS: Record<UnidadExpedienteFotoSlot, string> = {
@@ -385,14 +636,25 @@ export function Unidades() {
 
   const [panelMulitasOpen, setPanelMulitasOpen] = useState(false);
   const [mulitaSemanaInicio, setMulitaSemanaInicio] = useState(lunesSemanaISO());
-  const [mulitaEdits, setMulitaEdits] = useState<
-    Record<string, { nomina: string; diesel: string; extras: string; casetas: string }>
-  >({});
+  const [mulitaEdits, setMulitaEdits] = useState<Record<string, MulitaSemanalEd>>({});
   const [mulitaSavingId, setMulitaSavingId] = useState<string | null>(null);
   const [mulitaLoadingSemana, setMulitaLoadingSemana] = useState(false);
+  const [mulitaEditorUnidadId, setMulitaEditorUnidadId] = useState<string | null>(null);
   const [mulitaHistorialUnidadId, setMulitaHistorialUnidadId] = useState<string>('');
   const [mulitaHistorialRows, setMulitaHistorialRows] = useState<MulitaGastoSemanalRow[]>([]);
   const [mulitaHistorialLoading, setMulitaHistorialLoading] = useState(false);
+  const [mulitaDrawerMantGastos, setMulitaDrawerMantGastos] = useState<MulitaGastoMantenimientoRow[]>([]);
+  const [mulitaDrawerMantenimientos, setMulitaDrawerMantenimientos] = useState<MantenimientoRow[]>([]);
+  const [mulitaDrawerEvidencias, setMulitaDrawerEvidencias] = useState<MulitaEvidenciaRow[]>([]);
+  const [mulitaDrawerAuxLoading, setMulitaDrawerAuxLoading] = useState(false);
+  const [mulitaMantNuevo, setMulitaMantNuevo] = useState({
+    mantenimientoId: '',
+    fecha: '',
+    concepto: '',
+    cantidad: '',
+  });
+  const [mulitaMantSaving, setMulitaMantSaving] = useState(false);
+  const [mulitaEvidenciaUploading, setMulitaEvidenciaUploading] = useState(false);
 
   const [damageDesc, setDamageDesc] = useState('');
   const [newDoc, setNewDoc] = useState<{ tipo: DocTipo; file: File | null }>({ tipo: 'Otro', file: null });
@@ -555,17 +817,34 @@ export function Unidades() {
     );
   }, [unidadesMulitas]);
 
-  function totalMulitaSemanalDesdeForm(ed: {
-    nomina: string;
-    diesel: string;
-    extras: string;
-    casetas: string;
-  }): number | null {
+  const mulitaEditorUnidad = useMemo(
+    () =>
+      mulitaEditorUnidadId ? (mulitasOrdenadas.find((x) => x.id === mulitaEditorUnidadId) ?? null) : null,
+    [mulitaEditorUnidadId, mulitasOrdenadas]
+  );
+
+  const mulitaDrawerUnidad = mulitaEditorUnidad;
+
+  function totalMulitaSemanalDesdeForm(ed: MulitaSemanalEd, semanaLunes: string): number | null {
     let sum = 0;
-    for (const key of ['nomina', 'diesel', 'extras', 'casetas'] as const) {
+    for (const key of ['nomina', 'diesel'] as const) {
       const p = parseMontoUnidadInput(ed[key]);
       if (!p.ok) return null;
       if (p.value != null) sum += p.value;
+    }
+    const hx = sumaHorasExtrasMxnPreview(ed.horasExtrasLineas, semanaLunes);
+    if (hx === null) return null;
+    sum += hx;
+    const eo = sumaExtrasOperacionesPreview(ed.extrasOperacionesLineas, semanaLunes);
+    if (eo === null) return null;
+    sum += eo;
+    const gf = sumaGastosFijosPreview(ed.gastosFijosLineas, semanaLunes);
+    if (gf === null) return null;
+    sum += gf;
+    if (ed.faltasDias.length === 0) {
+      const pb = parseMontoUnidadInput(ed.bonoPuntualidad);
+      if (!pb.ok) return null;
+      if (pb.value != null) sum += pb.value;
     }
     return sum;
   }
@@ -575,13 +854,13 @@ export function Unidades() {
     const totales = mulitasOrdenadas.map((u) => {
       const ed = mulitaEdits[u.id];
       if (!ed) return null;
-      return totalMulitaSemanalDesdeForm(ed);
+      return totalMulitaSemanalDesdeForm(ed, mulitaSemanaInicio);
     });
     if (totales.some((x) => x === null)) return null;
     const validos = totales.filter((x): x is number => x != null);
     if (validos.length === 0) return null;
     return validos.reduce((acc, x) => acc + x, 0);
-  }, [panelMulitasOpen, mulitasOrdenadas, mulitaEdits]);
+  }, [panelMulitasOpen, mulitasOrdenadas, mulitaEdits, mulitaSemanaInicio]);
 
   function openPanelMulitas() {
     setMulitaSemanaInicio(lunesSemanaISO());
@@ -591,7 +870,38 @@ export function Unidades() {
 
   function closePanelMulitas() {
     if (mulitaSavingId) return;
+    setMulitaEditorUnidadId(null);
     setPanelMulitasOpen(false);
+  }
+
+  function openMulitaSemanalEditor(id: string) {
+    setMulitaEditorUnidadId(id);
+    setMulitaHistorialUnidadId(id);
+  }
+
+  function closeMulitaSemanalDrawer() {
+    if (mulitaSavingId) return;
+    setMulitaEditorUnidadId(null);
+  }
+
+  function toggleFaltaDiaMulita(unidadId: string, iso: string) {
+    setMulitaEdits((prev) => {
+      const ed = prev[unidadId];
+      if (!ed) return prev;
+      const next = new Set(ed.faltasDias);
+      if (next.has(iso)) next.delete(iso);
+      else next.add(iso);
+      const faltasDias = [...next].sort();
+      const hayFaltas = faltasDias.length > 0;
+      return {
+        ...prev,
+        [unidadId]: {
+          ...ed,
+          faltasDias,
+          bonoPuntualidad: hayFaltas ? '' : ed.bonoPuntualidad,
+        },
+      };
+    });
   }
 
   async function guardarGastosMulita(id: string) {
@@ -599,28 +909,43 @@ export function Unidades() {
     if (!ed) return;
     const pn = parseMontoUnidadInput(ed.nomina);
     const pd = parseMontoUnidadInput(ed.diesel);
-    const pe = parseMontoUnidadInput(ed.extras);
-    const pc = parseMontoUnidadInput(ed.casetas);
-    if (!pn.ok || !pd.ok || !pe.ok || !pc.ok) {
-      toast('Revisa los importes semanales (MXN).', 'error');
+    const pb = parseMontoUnidadInput(ed.bonoPuntualidad);
+    const he = validarYLineasHorasExtrasApi(ed.horasExtrasLineas, mulitaSemanaInicio);
+    const eo = validarYExtrasOperacionesApi(ed.extrasOperacionesLineas, mulitaSemanaInicio);
+    const gf = validarYGastosFijosApi(ed.gastosFijosLineas, mulitaSemanaInicio);
+    if (!pn.ok || !pd.ok || !pb.ok || !he.ok || !eo.ok || !gf.ok) {
+      const msg = !he.ok ? he.message : !eo.ok ? eo.message : !gf.ok ? gf.message : 'Revisa los importes semanales (MXN).';
+      toast(msg, 'error');
       return;
     }
     setMulitaSavingId(id);
     try {
+      const hayFaltas = ed.faltasDias.length > 0;
       const gasto = await upsertMulitaGastoSemanaApi(id, {
         semanaInicio: mulitaSemanaInicio,
         nominaOperador: pn.value,
         diesel: pd.value,
-        horasExtras: pe.value,
-        casetas: pc.value,
+        horasExtrasLineas: he.payload,
+        extrasOperacionesLineas: eo.payload,
+        gastosFijosLineas: gf.payload,
+        faltasDias: ed.faltasDias,
+        bonoPuntualidad: hayFaltas ? 0 : pb.value,
       });
       setMulitaEdits((prev) => ({
         ...prev,
         [id]: {
           nomina: gasto.nominaOperador != null ? String(gasto.nominaOperador) : '',
+          horasExtrasLineas: horasExtrasLineasFormDesdeApi(gasto, mulitaSemanaInicio),
+          extrasOperacionesLineas: extrasOperacionesLineasFormDesdeApi(gasto, mulitaSemanaInicio),
+          gastosFijosLineas: gastosFijosLineasFormDesdeApi(gasto, mulitaSemanaInicio),
           diesel: gasto.diesel != null ? String(gasto.diesel) : '',
-          extras: gasto.horasExtras != null ? String(gasto.horasExtras) : '',
-          casetas: gasto.casetas != null ? String(gasto.casetas) : '',
+          faltasDias: gasto.faltasDias ?? [],
+          bonoPuntualidad:
+            (gasto.faltasDias?.length ?? 0) > 0
+              ? ''
+              : gasto.bonoPuntualidad != null
+                ? String(gasto.bonoPuntualidad)
+                : '',
         },
       }));
       if (mulitaHistorialUnidadId === id) {
@@ -642,16 +967,21 @@ export function Unidades() {
     setMulitaLoadingSemana(true);
     getMulitaGastosSemanaApi(mulitaSemanaInicio)
       .then((rows) => {
-        const map: Record<string, { nomina: string; diesel: string; extras: string; casetas: string }> = {};
+        const map: Record<string, MulitaSemanalEd> = {};
         for (const u of mulitasOrdenadas) {
-          map[u.id] = { nomina: '', diesel: '', extras: '', casetas: '' };
+          map[u.id] = defaultMulitaSemanalEd(mulitaSemanaInicio);
         }
         for (const r of rows) {
+          const faltas = r.faltasDias ?? [];
           map[r.unidadId] = {
             nomina: r.nominaOperador != null ? String(r.nominaOperador) : '',
+            horasExtrasLineas: horasExtrasLineasFormDesdeApi(r, mulitaSemanaInicio),
+            extrasOperacionesLineas: extrasOperacionesLineasFormDesdeApi(r, mulitaSemanaInicio),
+            gastosFijosLineas: gastosFijosLineasFormDesdeApi(r, mulitaSemanaInicio),
             diesel: r.diesel != null ? String(r.diesel) : '',
-            extras: r.horasExtras != null ? String(r.horasExtras) : '',
-            casetas: r.casetas != null ? String(r.casetas) : '',
+            faltasDias: faltas,
+            bonoPuntualidad:
+              faltas.length > 0 ? '' : r.bonoPuntualidad != null ? String(r.bonoPuntualidad) : '',
           };
         }
         setMulitaEdits(map);
@@ -661,6 +991,12 @@ export function Unidades() {
       })
       .finally(() => setMulitaLoadingSemana(false));
   }, [panelMulitasOpen, mulitaSemanaInicio, mulitasOrdenadas, toast]);
+
+  useEffect(() => {
+    if (mulitaEditorUnidadId && !mulitasOrdenadas.some((u) => u.id === mulitaEditorUnidadId)) {
+      setMulitaEditorUnidadId(null);
+    }
+  }, [mulitaEditorUnidadId, mulitasOrdenadas]);
 
   useEffect(() => {
     if (!panelMulitasOpen) return;
@@ -679,6 +1015,44 @@ export function Unidades() {
       .catch((e) => toast(e instanceof Error ? e.message : 'Error al cargar historial', 'error'))
       .finally(() => setMulitaHistorialLoading(false));
   }, [panelMulitasOpen, mulitaHistorialUnidadId, mulitasOrdenadas, toast]);
+
+  useEffect(() => {
+    if (!panelMulitasOpen || !mulitaDrawerUnidad) {
+      setMulitaDrawerMantGastos([]);
+      setMulitaDrawerMantenimientos([]);
+      setMulitaDrawerEvidencias([]);
+      return;
+    }
+    const uid = mulitaDrawerUnidad.id;
+    let cancel = false;
+    setMulitaMantNuevo((prev) => ({
+      mantenimientoId: prev.mantenimientoId,
+      fecha: prev.fecha || mulitaSemanaInicio,
+      concepto: prev.concepto,
+      cantidad: prev.cantidad,
+    }));
+    setMulitaDrawerAuxLoading(true);
+    Promise.all([
+      getMulitaGastosMantenimientoUnidadApi(uid).catch(() => [] as MulitaGastoMantenimientoRow[]),
+      getMantenimientosUnidad(uid).catch(() => [] as MantenimientoRow[]),
+      getMulitaEvidenciasApi(uid, mulitaSemanaInicio).catch(() => [] as MulitaEvidenciaRow[]),
+    ])
+      .then(([g, m, e]) => {
+        if (cancel) return;
+        setMulitaDrawerMantGastos(g);
+        setMulitaDrawerMantenimientos(m);
+        setMulitaDrawerEvidencias(e);
+      })
+      .catch(() => {
+        if (!cancel) toast('No se pudieron cargar datos auxiliares del panel mulita', 'error');
+      })
+      .finally(() => {
+        if (!cancel) setMulitaDrawerAuxLoading(false);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [panelMulitasOpen, mulitaDrawerUnidad?.id, mulitaSemanaInicio, toast]);
 
   function openDrawer(id: string, nextTab: Tab = 'expediente') {
     setSelectedId(id);
@@ -720,12 +1094,6 @@ export function Unidades() {
       unidadRotulada: rotuladaApiToForm(u.unidadRotulada),
       valorComercial: u.valorComercial != null ? String(u.valorComercial) : '',
       rentaMensual: u.rentaMensual != null ? String(u.rentaMensual) : '',
-      mulitaNominaOperadorMensual:
-        u.mulitaNominaOperadorMensual != null ? String(u.mulitaNominaOperadorMensual) : '',
-      mulitaDieselMensual: u.mulitaDieselMensual != null ? String(u.mulitaDieselMensual) : '',
-      mulitaHorasExtrasMensual:
-        u.mulitaHorasExtrasMensual != null ? String(u.mulitaHorasExtrasMensual) : '',
-      mulitaCasetasMensual: u.mulitaCasetasMensual != null ? String(u.mulitaCasetasMensual) : '',
       pendientePlacasMotivo:
         u.pendientePlacasMotivo === 'baja_placas' || u.pendientePlacasMotivo === 'pendiente_importar'
           ? u.pendientePlacasMotivo
@@ -742,10 +1110,6 @@ export function Unidades() {
     e.preventDefault();
     const vc = parseMontoUnidadInput(formNueva.valorComercial);
     const rm = parseMontoUnidadInput(formNueva.rentaMensual);
-    const mn = parseMontoUnidadInput(formNueva.mulitaNominaOperadorMensual);
-    const md = parseMontoUnidadInput(formNueva.mulitaDieselMensual);
-    const mh = parseMontoUnidadInput(formNueva.mulitaHorasExtrasMensual);
-    const mc = parseMontoUnidadInput(formNueva.mulitaCasetasMensual);
     if (!vc.ok) {
       setError(vc.message);
       toast(vc.message, 'error');
@@ -754,12 +1118,6 @@ export function Unidades() {
     if (!rm.ok) {
       setError(rm.message);
       toast(rm.message, 'error');
-      return;
-    }
-    if (!mn.ok || !md.ok || !mh.ok || !mc.ok) {
-      const msg = 'Revisa los importes de gastos de operación para mulita.';
-      setError(msg);
-      toast(msg, 'error');
       return;
     }
     if (
@@ -792,10 +1150,6 @@ export function Unidades() {
       unidadRotulada: rotuladaFormToApi(formNueva.unidadRotulada),
       valorComercial: vc.value,
       rentaMensual: rm.value,
-      mulitaNominaOperadorMensual: mn.value,
-      mulitaDieselMensual: md.value,
-      mulitaHorasExtrasMensual: mh.value,
-      mulitaCasetasMensual: mc.value,
       pendientePlacasMotivo:
         formNueva.estatus === 'Disponible' && formNueva.subestatusDisponible === 'pendiente_placas'
           ? formNueva.pendientePlacasMotivo || null
@@ -841,10 +1195,6 @@ export function Unidades() {
     if (!selectedId) return;
     const vc = parseMontoUnidadInput(formEditar.valorComercial);
     const rm = parseMontoUnidadInput(formEditar.rentaMensual);
-    const mn = parseMontoUnidadInput(formEditar.mulitaNominaOperadorMensual);
-    const md = parseMontoUnidadInput(formEditar.mulitaDieselMensual);
-    const mh = parseMontoUnidadInput(formEditar.mulitaHorasExtrasMensual);
-    const mc = parseMontoUnidadInput(formEditar.mulitaCasetasMensual);
     if (!vc.ok) {
       setError(vc.message);
       toast(vc.message, 'error');
@@ -853,12 +1203,6 @@ export function Unidades() {
     if (!rm.ok) {
       setError(rm.message);
       toast(rm.message, 'error');
-      return;
-    }
-    if (!mn.ok || !md.ok || !mh.ok || !mc.ok) {
-      const msg = 'Revisa los importes de gastos de operación para mulita.';
-      setError(msg);
-      toast(msg, 'error');
       return;
     }
     if (
@@ -891,10 +1235,6 @@ export function Unidades() {
       unidadRotulada: rotuladaFormToApi(formEditar.unidadRotulada),
       valorComercial: vc.value,
       rentaMensual: rm.value,
-      mulitaNominaOperadorMensual: mn.value,
-      mulitaDieselMensual: md.value,
-      mulitaHorasExtrasMensual: mh.value,
-      mulitaCasetasMensual: mc.value,
       pendientePlacasMotivo:
         formEditar.estatus === 'Disponible' && formEditar.subestatusDisponible === 'pendiente_placas'
           ? formEditar.pendientePlacasMotivo || null
@@ -1058,6 +1398,11 @@ export function Unidades() {
     setNuevaImagenes((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  const mulitaDrawerEd =
+    mulitaDrawerUnidad != null
+      ? (mulitaEdits[mulitaDrawerUnidad.id] ?? defaultMulitaSemanalEd(mulitaSemanaInicio))
+      : null;
+
   function handleEliminarUnidad(id: string) {
     setError(null);
     deleteUnidad(id)
@@ -1100,8 +1445,9 @@ export function Unidades() {
 
       {error && <div className={CRUD_ERROR_BANNER}>{error}</div>}
 
-      {/* Gastos mulitas: solo bloque informativo y debajo el CRUD (sin modal) */}
+      {/* Gastos mulitas: lista compacta + panel lateral (drawer) para captura detallada */}
       {panelMulitasOpen && (
+        <>
         <section
           className="mb-6 overflow-hidden rounded-xl border border-skyline-border bg-white shadow-sm"
           aria-labelledby="mulitas-gastos-heading"
@@ -1111,8 +1457,9 @@ export function Unidades() {
               Unidades Mulitas · gastos de operación (semanal)
             </h2>
             <p className="mt-1.5 text-sm text-gray-600">
-              Puedes editar aquí los montos por semana sin perder historial anterior. Si la unidad tiene renta con operador, aquí verás
-              el operador vinculado.
+              Montos por semana (lunes a domingo). Usa <strong className="font-medium text-slate-800">Editar gastos</strong> para abrir el
+              panel lateral: ahí capturas nómina, faltas, bono, diésel, horas extras por línea y extras de operación, sin
+              amontonar la tabla principal.
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
@@ -1151,123 +1498,80 @@ export function Unidades() {
               <div className="py-10 text-center text-sm text-gray-500">Cargando semana…</div>
             ) : (
               <div className="overflow-x-auto rounded-lg border border-skyline-border">
-                <table className="min-w-[72rem] w-full divide-y divide-skyline-border text-sm">
+                <table className="w-full min-w-[36rem] divide-y divide-skyline-border text-sm">
                   <thead>
                     <tr className={CRUD_THEAD_TR}>
-                      <CrudTableTh className="whitespace-nowrap px-3 py-3 align-middle" icon="mdi:tag-outline">No. econ.</CrudTableTh>
-                      <CrudTableTh className="whitespace-nowrap px-3 py-3 align-middle" icon="mdi:card-outline">Placas</CrudTableTh>
-                      <CrudTableTh className="min-w-[8rem] whitespace-nowrap px-3 py-3 align-middle" icon="mdi:car-outline">Marca / modelo</CrudTableTh>
-                      <CrudTableTh className="min-w-[10rem] whitespace-nowrap px-2 py-3 align-middle" icon="mdi:account-hard-hat-outline">
-                        Operador vinculado
+                      <CrudTableTh className="min-w-[9rem] px-3 py-3 align-middle" icon="mdi:forklift">
+                        Unidad
                       </CrudTableTh>
-                      <CrudTableTh className="min-w-[9rem] whitespace-nowrap px-2 py-3 align-middle" icon="mdi:key-chain-variant">
-                        Renta vinculada
+                      <CrudTableTh className="min-w-[8rem] px-3 py-3 align-middle" icon="mdi:account-hard-hat-outline">
+                        Operador
                       </CrudTableTh>
-                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:cash">
-                        Nómina operador
+                      <CrudTableTh className="min-w-[8rem] px-3 py-3 align-middle" icon="mdi:briefcase-outline">
+                        Cliente / renta
                       </CrudTableTh>
-                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:gas-station-outline">Diésel</CrudTableTh>
-                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:clock-outline">
-                        Horas extras
+                      <CrudTableTh className="whitespace-nowrap px-3 py-3 align-middle" icon="mdi:sigma">
+                        Total semana
                       </CrudTableTh>
-                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle" icon="mdi:road-variant">
-                        Casetas
-                      </CrudTableTh>
-                      <CrudTableTh className="whitespace-nowrap px-2 py-3 align-middle text-right" icon="mdi:calendar-month-outline">
-                        Total / semana
-                      </CrudTableTh>
-                      <CrudTableTh className="w-[1%] whitespace-nowrap px-3 py-3 align-middle" icon="mdi:content-save-outline">
-                        Acción
+                      <CrudTableTh className="w-[1%] whitespace-nowrap px-3 py-3 align-middle" icon="mdi:draw-pen">
+                        Gastos
                       </CrudTableTh>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-skyline-border bg-white">
-                    {mulitasOrdenadas.map((u) => {
-                      const ed = mulitaEdits[u.id] ?? {
-                        nomina: '',
-                        diesel: '',
-                        extras: '',
-                        casetas: '',
-                      };
-                      const filaTotal = totalMulitaSemanalDesdeForm(ed);
+                    {mulitasOrdenadas.map((u, rowIdx) => {
+                      const ed = mulitaEdits[u.id] ?? defaultMulitaSemanalEd(mulitaSemanaInicio);
+                      const filaTotal = totalMulitaSemanalDesdeForm(ed, mulitaSemanaInicio);
                       const operador = (u.operadorEnRenta ?? '').trim();
                       const cliente = (u.clienteEnRenta ?? '').trim();
-                      const inputCls =
-                        'w-full min-w-[6rem] rounded-md border border-skyline-border px-2 py-1.5 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue';
+                      const abierta = mulitaEditorUnidadId === u.id;
                       return (
-                        <tr key={u.id} className="hover:bg-gray-50/60">
-                          <td className="whitespace-nowrap px-3 py-2 text-center font-medium text-gray-900">
-                            {u.numeroEconomico ?? '—'}
+                        <tr
+                          key={u.id}
+                          className={`${crudTableRowClass(rowIdx)} ${abierta ? 'bg-sky-50/80' : ''} cursor-pointer`}
+                          onClick={() => openMulitaSemanalEditor(u.id)}
+                        >
+                          <td className="px-3 py-2.5 align-middle text-center">
+                            <div className="font-semibold text-slate-900">
+                              {(u.numeroEconomico ?? '').trim() || '—'}
+                            </div>
+                            <div className="text-xs text-slate-600">{u.placas}</div>
+                            <div className="mt-0.5 text-xs text-slate-500">
+                              {u.marca} {u.modelo}
+                            </div>
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-center text-gray-800">{u.placas}</td>
-                          <td className="px-3 py-2 text-center text-gray-700">
-                            {u.marca} {u.modelo}
+                          <td className="px-3 py-2.5 align-middle text-center">
+                            {operador ? (
+                              <span className="text-sm text-slate-800">{operador}</span>
+                            ) : (
+                              <span className="mx-auto block max-w-[14rem] text-xs leading-snug text-slate-500">
+                                {MULITA_TEXTO_SIN_OPERADOR_CLIENTE}
+                              </span>
+                            )}
                           </td>
-                          <td className="px-2 py-2 text-center">
-                            <span className="inline-block text-sm font-medium text-slate-700">{operador || 'Aun no'}</span>
+                          <td className="px-3 py-2.5 align-middle text-center">
+                            {cliente ? (
+                              <span className="text-sm text-slate-800">{cliente}</span>
+                            ) : (
+                              <span className="mx-auto block max-w-[14rem] text-xs leading-snug text-slate-500">
+                                {MULITA_TEXTO_SIN_OPERADOR_CLIENTE}
+                              </span>
+                            )}
                           </td>
-                          <td className="px-2 py-2 text-center">
-                            <span className="inline-block text-sm font-medium text-slate-700">{cliente || 'Aun no'}</span>
-                          </td>
-                          <td className="px-2 py-2">
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              className={inputCls}
-                              placeholder="MXN"
-                              value={ed.nomina}
-                              onChange={(e) =>
-                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, nomina: e.target.value } }))
-                              }
-                            />
-                          </td>
-                          <td className="px-2 py-2">
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              className={inputCls}
-                              placeholder="MXN"
-                              value={ed.diesel}
-                              onChange={(e) =>
-                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, diesel: e.target.value } }))
-                              }
-                            />
-                          </td>
-                          <td className="px-2 py-2">
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              className={inputCls}
-                              placeholder="MXN"
-                              value={ed.extras}
-                              onChange={(e) =>
-                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, extras: e.target.value } }))
-                              }
-                            />
-                          </td>
-                          <td className="px-2 py-2">
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              className={inputCls}
-                              placeholder="MXN"
-                              value={ed.casetas}
-                              onChange={(e) =>
-                                setMulitaEdits((prev) => ({ ...prev, [u.id]: { ...ed, casetas: e.target.value } }))
-                              }
-                            />
-                          </td>
-                          <td className="whitespace-nowrap px-2 py-2 text-center font-medium text-gray-900">
+                          <td className="whitespace-nowrap px-3 py-2.5 text-center font-medium tabular-nums text-slate-900">
                             {filaTotal === null ? '—' : textoMontoUnidadTabla(filaTotal)}
                           </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-center">
+                          <td className="whitespace-nowrap px-3 py-2.5 align-middle text-center">
                             <button
                               type="button"
                               className="btn btn-primary btn-sm"
                               disabled={mulitaSavingId !== null}
-                              onClick={() => guardarGastosMulita(u.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openMulitaSemanalEditor(u.id);
+                              }}
                             >
-                              {mulitaSavingId === u.id ? '…' : 'Guardar'}
+                              Editar gastos
                             </button>
                           </td>
                         </tr>
@@ -1324,14 +1628,23 @@ export function Unidades() {
                 <p className="text-sm text-gray-500">Sin semanas guardadas para esta unidad.</p>
               ) : (
                 <div className="overflow-x-auto rounded-lg border border-skyline-border">
-                  <table className="min-w-[44rem] w-full divide-y divide-skyline-border text-sm">
+                  <table className="min-w-[72rem] w-full divide-y divide-skyline-border text-sm">
                     <thead className="bg-slate-50">
                       <tr className={CRUD_THEAD_TR}>
                         <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:calendar">Semana</CrudTableTh>
                         <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:cash">Nómina</CrudTableTh>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:calendar-remove-outline">Faltas</CrudTableTh>
+                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:medal-outline">Bono punt.</CrudTableTh>
                         <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:gas-station-outline">Diésel</CrudTableTh>
-                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:clock-outline">Horas extras</CrudTableTh>
-                        <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:road-variant">Casetas</CrudTableTh>
+                        <CrudTableTh className="min-w-[10rem] px-3 py-2.5 align-middle" icon="mdi:clock-outline">
+                          Horas extras
+                        </CrudTableTh>
+                        <CrudTableTh className="min-w-[10rem] px-3 py-2.5 align-middle" icon="mdi:clipboard-text-outline">
+                          Extras op.
+                        </CrudTableTh>
+                        <CrudTableTh className="min-w-[10rem] px-3 py-2.5 align-middle" icon="mdi:lock-outline">
+                          Gastos fijos
+                        </CrudTableTh>
                         <CrudTableTh className="px-3 py-2.5 align-middle" icon="mdi:sigma">Total</CrudTableTh>
                       </tr>
                     </thead>
@@ -1340,9 +1653,29 @@ export function Unidades() {
                         <tr key={r.id} className={crudTableRowClass(idx)}>
                           <td className="px-3 py-2 text-center font-medium text-slate-800">{r.semanaInicio}</td>
                           <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.nominaOperador)}</td>
+                          <td className="max-w-[12rem] px-3 py-2 text-center text-xs text-slate-700">
+                            {resumenFaltasMulitaHistorial(r.faltasDias)}
+                          </td>
+                          <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.bonoPuntualidad)}</td>
                           <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.diesel)}</td>
-                          <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.horasExtras)}</td>
-                          <td className="px-3 py-2 text-center tabular-nums">{textoMontoUnidadTabla(r.casetas)}</td>
+                          <td className="max-w-[14rem] px-3 py-2 text-left text-[10px] leading-snug text-slate-700">
+                            <div>{textoResumenHorasExtrasHistorial(r)}</div>
+                            <div className="mt-0.5 text-center font-semibold tabular-nums text-slate-900">
+                              {textoMontoUnidadTabla(r.horasExtras)}
+                            </div>
+                          </td>
+                          <td className="max-w-[14rem] px-3 py-2 text-left text-[10px] leading-snug text-slate-700">
+                            <div>{textoResumenExtrasOpHistorial(r)}</div>
+                            <div className="mt-0.5 text-center font-semibold tabular-nums text-slate-900">
+                              {textoMontoUnidadTabla(r.extrasOperacionesMonto ?? null)}
+                            </div>
+                          </td>
+                          <td className="max-w-[14rem] px-3 py-2 text-left text-[10px] leading-snug text-slate-700">
+                            <div>{textoResumenGastosFijosHistorial(r)}</div>
+                            <div className="mt-0.5 text-center font-semibold tabular-nums text-slate-900">
+                              {textoMontoUnidadTabla(r.gastosFijosMonto ?? null)}
+                            </div>
+                          </td>
                           <td className="px-3 py-2 text-center font-semibold tabular-nums">{textoMontoUnidadTabla(r.totalSemanal)}</td>
                         </tr>
                       ))}
@@ -1353,6 +1686,816 @@ export function Unidades() {
             </div>
           ) : null}
         </section>
+        {mulitaDrawerUnidad && mulitaDrawerEd
+          ? (() => {
+              const u = mulitaDrawerUnidad;
+              const ed = mulitaDrawerEd;
+              const domingoSem = moverDiasISO(mulitaSemanaInicio, 6);
+              const diasSem = diasSemanaMulitaDesdeLunes(mulitaSemanaInicio);
+              const hayFaltas = ed.faltasDias.length > 0;
+              const filaTotal = totalMulitaSemanalDesdeForm(ed, mulitaSemanaInicio);
+              const operadorDr = (u.operadorEnRenta ?? '').trim();
+              const clienteDr = (u.clienteEnRenta ?? '').trim();
+              const inputCls =
+                'w-full rounded-md border border-skyline-border px-2.5 py-2 text-sm outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue';
+              const secTitle = 'mb-3 text-xs font-bold uppercase tracking-wide text-slate-600';
+              const secBox = 'rounded-xl border border-skyline-border bg-white p-4 shadow-sm';
+              return (
+                <div
+                  className="fixed inset-0 z-[62]"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="mulita-drawer-title"
+                >
+                  <div className="absolute inset-0 bg-black/40" onClick={closeMulitaSemanalDrawer} />
+                  <div className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col bg-white shadow-2xl sm:max-w-2xl">
+                    <div className="shrink-0 border-b border-skyline-border p-4 sm:p-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-skyline-blue/10 text-skyline-blue">
+                              <Icon icon="mdi:forklift" className="size-5" aria-hidden />
+                            </div>
+                            <div className="min-w-0">
+                              <h2 id="mulita-drawer-title" className="text-lg font-semibold text-gray-900">
+                                Gastos semana mulita
+                              </h2>
+                              <p className="truncate text-sm text-slate-600">
+                                Semana desde <span className="font-semibold text-slate-800">{mulitaSemanaInicio}</span>
+                              </p>
+                            </div>
+                          </div>
+                          <p className="mt-2 text-sm font-medium text-slate-800">
+                            {(u.numeroEconomico ?? '').trim() || '—'} · {u.placas} · {u.marca} {u.modelo}
+                          </p>
+                        </div>
+                        <CrudActionIconButton icon="mdi:close" title="Cerrar panel" onClick={closeMulitaSemanalDrawer} />
+                      </div>
+                    </div>
+
+                    <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-5">
+                      <div className={secBox}>
+                        <div className={secTitle}>Contexto</div>
+                        <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                          <div>
+                            <dt className="text-xs font-medium text-slate-500">Operador vinculado</dt>
+                            <dd className="font-medium text-slate-900">
+                              {operadorDr || (
+                                <span className="font-normal text-slate-500">{MULITA_TEXTO_SIN_OPERADOR_CLIENTE}</span>
+                              )}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-xs font-medium text-slate-500">Cliente / renta</dt>
+                            <dd className="font-medium text-slate-900">
+                              {clienteDr || (
+                                <span className="font-normal text-slate-500">{MULITA_TEXTO_SIN_OPERADOR_CLIENTE}</span>
+                              )}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Gastos mulita vinculados a mantenimiento</div>
+                        <p className="mb-3 text-xs text-slate-500">
+                          Cada registro enlaza una orden de mantenimiento de esta unidad (fecha, concepto e importe en MXN). Se
+                          reflejan en el total de <strong className="font-medium text-slate-700">mantenimiento</strong> en Finanzas.
+                        </p>
+                        {mulitaDrawerAuxLoading ? (
+                          <p className="text-xs text-slate-500">Cargando…</p>
+                        ) : mulitaDrawerMantenimientos.length === 0 ? (
+                          <p className="text-xs text-amber-800">
+                            No hay órdenes de mantenimiento para esta unidad. Registra una en el módulo de mantenimiento para poder
+                            vincular gastos.
+                          </p>
+                        ) : (
+                          <div className="mb-4 grid gap-2 sm:grid-cols-2">
+                            <label className="block sm:col-span-2">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Orden de mantenimiento</span>
+                              <select
+                                className={inputCls}
+                                value={mulitaMantNuevo.mantenimientoId}
+                                onChange={(e) =>
+                                  setMulitaMantNuevo((p) => ({ ...p, mantenimientoId: e.target.value }))
+                                }
+                              >
+                                <option value="">Selecciona…</option>
+                                {mulitaDrawerMantenimientos.map((m) => (
+                                  <option key={m.id} value={m.id}>
+                                    #{m.id} · {m.tipo} · {(m.descripcion || 'Sin descripción').slice(0, 48)}
+                                    {(m.descripcion || '').length > 48 ? '…' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Fecha</span>
+                              <input
+                                type="date"
+                                className={inputCls}
+                                value={mulitaMantNuevo.fecha}
+                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, fecha: e.target.value }))}
+                              />
+                            </label>
+                            <label className="block sm:col-span-2">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Concepto</span>
+                              <input
+                                type="text"
+                                className={inputCls}
+                                placeholder="Describe el gasto"
+                                value={mulitaMantNuevo.concepto}
+                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, concepto: e.target.value }))}
+                              />
+                            </label>
+                            <label className="block sm:col-span-2">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Cantidad (MXN)</span>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                className={inputCls}
+                                placeholder="MXN"
+                                value={mulitaMantNuevo.cantidad}
+                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, cantidad: e.target.value }))}
+                              />
+                            </label>
+                            <div className="sm:col-span-2">
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                disabled={mulitaMantSaving || mulitaSavingId !== null}
+                                onClick={async () => {
+                                  if (mulitaMantSaving || mulitaSavingId) return;
+                                  const mid = mulitaMantNuevo.mantenimientoId;
+                                  const pm = parseMontoUnidadInput(mulitaMantNuevo.cantidad);
+                                  if (
+                                    !mid ||
+                                    !mulitaMantNuevo.fecha ||
+                                    !mulitaMantNuevo.concepto.trim() ||
+                                    !pm.ok ||
+                                    pm.value == null
+                                  ) {
+                                    toast('Elige mantenimiento, fecha, concepto e importe válido.', 'error');
+                                    return;
+                                  }
+                                  setMulitaMantSaving(true);
+                                  try {
+                                    await createMulitaGastoMantenimientoApi(u.id, {
+                                      mantenimientoId: mid,
+                                      fecha: mulitaMantNuevo.fecha,
+                                      concepto: mulitaMantNuevo.concepto.trim(),
+                                      cantidad: pm.value,
+                                    });
+                                    const rows = await getMulitaGastosMantenimientoUnidadApi(u.id);
+                                    setMulitaDrawerMantGastos(rows);
+                                    setMulitaMantNuevo({
+                                      mantenimientoId: '',
+                                      fecha: mulitaSemanaInicio,
+                                      concepto: '',
+                                      cantidad: '',
+                                    });
+                                    toast('Gasto vinculado a mantenimiento registrado.');
+                                  } catch (e) {
+                                    toast(e instanceof Error ? e.message : 'Error', 'error');
+                                  } finally {
+                                    setMulitaMantSaving(false);
+                                  }
+                                }}
+                              >
+                                {mulitaMantSaving ? 'Guardando…' : 'Añadir gasto'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {mulitaDrawerMantGastos.length > 0 ? (
+                          <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 text-xs">
+                            {mulitaDrawerMantGastos.map((g) => (
+                              <li key={g.id} className="flex flex-wrap items-center justify-between gap-2 px-2 py-2">
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-800">{g.concepto}</p>
+                                  <p className="text-slate-500">
+                                    {g.fecha} · Mtto #{g.mantenimientoId}
+                                    {g.mantenimientoTipo ? ` · ${g.mantenimientoTipo}` : ''}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold tabular-nums text-slate-900">
+                                    {textoMontoUnidadTabla(g.cantidad)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="rounded border border-rose-200 px-1.5 py-0.5 text-[11px] font-medium text-rose-800 hover:bg-rose-50"
+                                    disabled={mulitaSavingId !== null}
+                                    onClick={async () => {
+                                      if (mulitaSavingId) return;
+                                      if (!window.confirm('¿Eliminar este gasto vinculado?')) return;
+                                      try {
+                                        await deleteMulitaGastoMantenimientoApi(u.id, g.id);
+                                        setMulitaDrawerMantGastos(await getMulitaGastosMantenimientoUnidadApi(u.id));
+                                        toast('Gasto eliminado.');
+                                      } catch (e) {
+                                        toast(e instanceof Error ? e.message : 'Error', 'error');
+                                      }
+                                    }}
+                                  >
+                                    Eliminar
+                                  </button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Nómina y puntualidad</div>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-slate-600">Nómina operador (MXN)</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className={inputCls}
+                            placeholder="MXN"
+                            value={ed.nomina}
+                            onChange={(e) =>
+                              setMulitaEdits((prev) => ({
+                                ...prev,
+                                [u.id]: { ...ed, nomina: e.target.value },
+                              }))
+                            }
+                          />
+                        </label>
+                        <div className="mt-4">
+                          <span className="mb-2 block text-xs font-medium text-slate-600">Faltas por día</span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {diasSem.map(({ iso, label }) => {
+                              const on = ed.faltasDias.includes(iso);
+                              return (
+                                <button
+                                  key={iso}
+                                  type="button"
+                                  title={iso}
+                                  aria-pressed={on}
+                                  onClick={() => toggleFaltaDiaMulita(u.id, iso)}
+                                  className={`rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wide transition-colors ${
+                                    on
+                                      ? 'border-rose-300 bg-rose-100 text-rose-900'
+                                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-skyline-blue/50'
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {hayFaltas ? (
+                            <p className="mt-2 text-xs text-rose-700">Con faltas el bono de puntualidad no aplica.</p>
+                          ) : null}
+                        </div>
+                        <label className="mt-4 block">
+                          <span className="mb-1 block text-xs font-medium text-slate-600">Bono puntualidad (MXN)</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className={`${inputCls} ${hayFaltas ? 'cursor-not-allowed bg-slate-100 text-slate-500' : ''}`}
+                            placeholder="MXN"
+                            disabled={hayFaltas}
+                            value={hayFaltas ? '' : ed.bonoPuntualidad}
+                            onChange={(e) =>
+                              setMulitaEdits((prev) => ({
+                                ...prev,
+                                [u.id]: { ...ed, bonoPuntualidad: e.target.value },
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Combustible</div>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-slate-600">Diésel semanal (MXN)</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className={inputCls}
+                            placeholder="MXN"
+                            value={ed.diesel}
+                            onChange={(e) =>
+                              setMulitaEdits((prev) => ({
+                                ...prev,
+                                [u.id]: { ...ed, diesel: e.target.value },
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Horas extras</div>
+                        <p className="mb-3 text-xs text-slate-500">Una línea por registro: fecha dentro de la semana, horas y precio por hora.</p>
+                        <div className="flex flex-col gap-3">
+                          {ed.horasExtrasLineas.map((ln, idx) => {
+                            const sub = (() => {
+                              const h = parseFloat(ln.horas.trim().replace(/,/g, '.'));
+                              const pm = parseMontoUnidadInput(ln.precioPorHora);
+                              if (!Number.isFinite(h) || h <= 0 || !pm.ok || pm.value == null) return null;
+                              return Math.round(h * pm.value * 100) / 100;
+                            })();
+                            return (
+                              <div
+                                key={`drawer-he-${u.id}-${idx}`}
+                                className="rounded-lg border border-slate-200 bg-slate-50/80 p-3"
+                              >
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end">
+                                  <label className="block min-w-0">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Fecha</span>
+                                    <input
+                                      type="date"
+                                      min={mulitaSemanaInicio}
+                                      max={domingoSem}
+                                      value={ln.fecha}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.horasExtrasLineas];
+                                          next[idx] = { ...next[idx], fecha: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, horasExtrasLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                  <label className="block min-w-0">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Horas</span>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step={0.25}
+                                      placeholder="0"
+                                      value={ln.horas}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.horasExtrasLineas];
+                                          next[idx] = { ...next[idx], horas: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, horasExtrasLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm tabular-nums"
+                                    />
+                                  </label>
+                                  <label className="block min-w-0">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">$/hora (MXN)</span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      placeholder="MXN"
+                                      value={ln.precioPorHora}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.horasExtrasLineas];
+                                          next[idx] = { ...next[idx], precioPorHora: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, horasExtrasLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                </div>
+                                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-xs text-slate-500">
+                                    {sub != null ? <>Subtotal: {textoMontoUnidadTabla(sub)}</> : '\u00a0'}
+                                  </span>
+                                  <div className="flex gap-2">
+                                    {ed.horasExtrasLineas.length > 1 ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-rose-50 hover:text-rose-800"
+                                        onClick={() =>
+                                          setMulitaEdits((prev) => {
+                                            const cur = prev[u.id] ?? ed;
+                                            const next = cur.horasExtrasLineas.filter((_, j) => j !== idx);
+                                            return {
+                                              ...prev,
+                                              [u.id]: {
+                                                ...cur,
+                                                horasExtrasLineas:
+                                                  next.length > 0 ? next : [nuevaLineaHorasExtra(mulitaSemanaInicio)],
+                                              },
+                                            };
+                                          })
+                                        }
+                                      >
+                                        Quitar línea
+                                      </button>
+                                    ) : null}
+                                    {idx === ed.horasExtrasLineas.length - 1 ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-md border border-skyline-border bg-white px-2 py-1 text-xs font-semibold text-skyline-blue hover:bg-sky-50"
+                                        onClick={() =>
+                                          setMulitaEdits((prev) => {
+                                            const cur = prev[u.id] ?? ed;
+                                            return {
+                                              ...prev,
+                                              [u.id]: {
+                                                ...cur,
+                                                horasExtrasLineas: [
+                                                  ...cur.horasExtrasLineas,
+                                                  nuevaLineaHorasExtra(mulitaSemanaInicio),
+                                                ],
+                                              },
+                                            };
+                                          })
+                                        }
+                                      >
+                                        + Línea
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Extras de operación</div>
+                        <p className="mb-3 text-xs text-slate-500">Conceptos adicionales con fecha y monto en MXN.</p>
+                        <div className="flex flex-col gap-3">
+                          {ed.extrasOperacionesLineas.map((ln, idx) => {
+                            const sub = (() => {
+                              const pm = parseMontoUnidadInput(ln.cantidad);
+                              if (!pm.ok || pm.value == null) return null;
+                              return pm.value;
+                            })();
+                            return (
+                              <div
+                                key={`drawer-eo-${u.id}-${idx}`}
+                                className="rounded-lg border border-slate-200 bg-white p-3"
+                              >
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-6 sm:items-end">
+                                  <label className="block min-w-0 sm:col-span-2">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Fecha</span>
+                                    <input
+                                      type="date"
+                                      min={mulitaSemanaInicio}
+                                      max={domingoSem}
+                                      value={ln.fecha}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.extrasOperacionesLineas];
+                                          next[idx] = { ...next[idx], fecha: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, extrasOperacionesLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                  <label className="block min-w-0 sm:col-span-3">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Concepto</span>
+                                    <input
+                                      type="text"
+                                      maxLength={200}
+                                      placeholder="Ej. refacción, viáticos…"
+                                      value={ln.concepto}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.extrasOperacionesLineas];
+                                          next[idx] = { ...next[idx], concepto: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, extrasOperacionesLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                  <label className="block min-w-0 sm:col-span-6 sm:max-w-xs">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Cantidad (MXN)</span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      placeholder="MXN"
+                                      value={ln.cantidad}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.extrasOperacionesLineas];
+                                          next[idx] = { ...next[idx], cantidad: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, extrasOperacionesLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                </div>
+                                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-xs text-slate-500">
+                                    {sub != null ? <>Subtotal: {textoMontoUnidadTabla(sub)}</> : '\u00a0'}
+                                  </span>
+                                  <div className="flex gap-2">
+                                    {ed.extrasOperacionesLineas.length > 1 ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-rose-50 hover:text-rose-800"
+                                        onClick={() =>
+                                          setMulitaEdits((prev) => {
+                                            const cur = prev[u.id] ?? ed;
+                                            const next = cur.extrasOperacionesLineas.filter((_, j) => j !== idx);
+                                            return {
+                                              ...prev,
+                                              [u.id]: {
+                                                ...cur,
+                                                extrasOperacionesLineas:
+                                                  next.length > 0 ? next : [nuevaLineaExtrasOp(mulitaSemanaInicio)],
+                                              },
+                                            };
+                                          })
+                                        }
+                                      >
+                                        Quitar línea
+                                      </button>
+                                    ) : null}
+                                    {idx === ed.extrasOperacionesLineas.length - 1 ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-md border border-skyline-border bg-white px-2 py-1 text-xs font-semibold text-skyline-blue hover:bg-sky-50"
+                                        onClick={() =>
+                                          setMulitaEdits((prev) => {
+                                            const cur = prev[u.id] ?? ed;
+                                            return {
+                                              ...prev,
+                                              [u.id]: {
+                                                ...cur,
+                                                extrasOperacionesLineas: [
+                                                  ...cur.extrasOperacionesLineas,
+                                                  nuevaLineaExtrasOp(mulitaSemanaInicio),
+                                                ],
+                                              },
+                                            };
+                                          })
+                                        }
+                                      >
+                                        + Línea
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Gastos fijos (operación mulita)</div>
+                        <p className="mb-3 text-xs text-slate-500">
+                          Conceptos recurrentes o fijos de la semana (fecha, concepto, MXN). Se suman al total de{' '}
+                          <strong className="font-medium text-slate-700">operación mulita</strong> junto con nómina, diésel, horas
+                          extras y extras de operación.
+                        </p>
+                        <div className="flex flex-col gap-3">
+                          {ed.gastosFijosLineas.map((ln, idx) => {
+                            const sub = (() => {
+                              const pm = parseMontoUnidadInput(ln.cantidad);
+                              if (!pm.ok || pm.value == null) return null;
+                              return pm.value;
+                            })();
+                            return (
+                              <div
+                                key={`drawer-gf-${u.id}-${idx}`}
+                                className="rounded-lg border border-slate-200 bg-white p-3"
+                              >
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-6 sm:items-end">
+                                  <label className="block min-w-0 sm:col-span-2">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Fecha</span>
+                                    <input
+                                      type="date"
+                                      min={mulitaSemanaInicio}
+                                      max={domingoSem}
+                                      value={ln.fecha}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.gastosFijosLineas];
+                                          next[idx] = { ...next[idx], fecha: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, gastosFijosLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                  <label className="block min-w-0 sm:col-span-3">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Concepto</span>
+                                    <input
+                                      type="text"
+                                      maxLength={200}
+                                      placeholder="Ej. seguro, permisos, renta de equipo…"
+                                      value={ln.concepto}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.gastosFijosLineas];
+                                          next[idx] = { ...next[idx], concepto: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, gastosFijosLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                  <label className="block min-w-0 sm:col-span-6 sm:max-w-xs">
+                                    <span className="mb-1 block text-xs font-medium text-slate-600">Cantidad (MXN)</span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      placeholder="MXN"
+                                      value={ln.cantidad}
+                                      onChange={(e) =>
+                                        setMulitaEdits((prev) => {
+                                          const cur = prev[u.id] ?? ed;
+                                          const next = [...cur.gastosFijosLineas];
+                                          next[idx] = { ...next[idx], cantidad: e.target.value };
+                                          return { ...prev, [u.id]: { ...cur, gastosFijosLineas: next } };
+                                        })
+                                      }
+                                      className="w-full rounded-md border border-skyline-border bg-white px-2 py-1.5 text-sm"
+                                    />
+                                  </label>
+                                </div>
+                                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                  <span className="text-xs text-slate-500">
+                                    {sub != null ? <>Subtotal: {textoMontoUnidadTabla(sub)}</> : '\u00a0'}
+                                  </span>
+                                  <div className="flex gap-2">
+                                    {ed.gastosFijosLineas.length > 1 ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-rose-50 hover:text-rose-800"
+                                        onClick={() =>
+                                          setMulitaEdits((prev) => {
+                                            const cur = prev[u.id] ?? ed;
+                                            const next = cur.gastosFijosLineas.filter((_, j) => j !== idx);
+                                            return {
+                                              ...prev,
+                                              [u.id]: {
+                                                ...cur,
+                                                gastosFijosLineas:
+                                                  next.length > 0 ? next : [nuevaLineaExtrasOp(mulitaSemanaInicio)],
+                                              },
+                                            };
+                                          })
+                                        }
+                                      >
+                                        Quitar línea
+                                      </button>
+                                    ) : null}
+                                    {idx === ed.gastosFijosLineas.length - 1 ? (
+                                      <button
+                                        type="button"
+                                        className="rounded-md border border-skyline-border bg-white px-2 py-1 text-xs font-semibold text-skyline-blue hover:bg-sky-50"
+                                        onClick={() =>
+                                          setMulitaEdits((prev) => {
+                                            const cur = prev[u.id] ?? ed;
+                                            return {
+                                              ...prev,
+                                              [u.id]: {
+                                                ...cur,
+                                                gastosFijosLineas: [
+                                                  ...cur.gastosFijosLineas,
+                                                  nuevaLineaExtrasOp(mulitaSemanaInicio),
+                                                ],
+                                              },
+                                            };
+                                          })
+                                        }
+                                      >
+                                        + Línea
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Evidencias (fotos)</div>
+                        <p className="mb-3 text-xs text-slate-500">
+                          Imágenes asociadas a esta unidad para la semana <span className="font-medium">{mulitaSemanaInicio}</span>.
+                          Formatos de imagen habituales (JPG, PNG, WebP).
+                        </p>
+                        <div className="mb-4">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={mulitaEvidenciaUploading || mulitaSavingId !== null}
+                            className="block w-full max-w-md text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-skyline-blue file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-sky-700"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = '';
+                              if (!file) return;
+                              setMulitaEvidenciaUploading(true);
+                              try {
+                                await uploadMulitaEvidenciaApi(u.id, file, { semanaInicio: mulitaSemanaInicio });
+                                setMulitaDrawerEvidencias(await getMulitaEvidenciasApi(u.id, mulitaSemanaInicio));
+                                toast('Evidencia subida.');
+                              } catch (err) {
+                                toast(err instanceof Error ? err.message : 'Error al subir', 'error');
+                              } finally {
+                                setMulitaEvidenciaUploading(false);
+                              }
+                            }}
+                          />
+                          {mulitaEvidenciaUploading ? (
+                            <p className="mt-1 text-xs text-slate-500">Subiendo…</p>
+                          ) : null}
+                        </div>
+                        {mulitaDrawerAuxLoading ? (
+                          <p className="text-xs text-slate-500">Cargando evidencias…</p>
+                        ) : mulitaDrawerEvidencias.length === 0 ? (
+                          <p className="text-xs text-slate-500">Aún no hay fotos para esta semana.</p>
+                        ) : (
+                          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                            {mulitaDrawerEvidencias.map((ev) => (
+                              <li
+                                key={ev.id}
+                                className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm"
+                              >
+                                <button
+                                  type="button"
+                                  className="block w-full p-0"
+                                  onClick={() => setLightboxImg(getImagenUrl(ev.ruta))}
+                                  title="Ampliar"
+                                >
+                                  <img
+                                    src={getImagenUrl(ev.ruta)}
+                                    alt={ev.nombreArchivo}
+                                    className="h-28 w-full object-cover"
+                                  />
+                                </button>
+                                <div className="border-t border-slate-200 p-2">
+                                  <p className="truncate text-[11px] font-medium text-slate-800" title={ev.nombreArchivo}>
+                                    {ev.nombreArchivo}
+                                  </p>
+                                  {ev.descripcion ? (
+                                    <p className="mt-0.5 line-clamp-2 text-[10px] text-slate-600">{ev.descripcion}</p>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="mt-2 w-full rounded border border-rose-200 py-1 text-[11px] font-medium text-rose-800 hover:bg-rose-50"
+                                    disabled={mulitaSavingId !== null}
+                                    onClick={async () => {
+                                      if (mulitaSavingId) return;
+                                      if (!window.confirm('¿Eliminar esta evidencia?')) return;
+                                      try {
+                                        await deleteMulitaEvidenciaApi(u.id, ev.id);
+                                        setMulitaDrawerEvidencias(await getMulitaEvidenciasApi(u.id, mulitaSemanaInicio));
+                                        toast('Evidencia eliminada.');
+                                      } catch (err) {
+                                        toast(err instanceof Error ? err.message : 'Error', 'error');
+                                      }
+                                    }}
+                                  >
+                                    Eliminar
+                                  </button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 border-t border-skyline-border bg-slate-50/90 p-4 sm:p-5">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Total semanal</p>
+                          <p className="text-xl font-bold tabular-nums text-slate-900">
+                            {filaTotal === null ? '—' : textoMontoUnidadTabla(filaTotal)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={mulitaSavingId !== null}
+                          onClick={() => guardarGastosMulita(u.id)}
+                        >
+                          {mulitaSavingId === u.id ? 'Guardando…' : 'Guardar gastos'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          : null}
+        </>
       )}
 
       {/* Toolbar — compacto; filtros detallados en panel plegable */}
@@ -1888,59 +3031,6 @@ export function Unidades() {
                   />
                 </label>
               </div>
-              {formNueva.tipoUnidad === 'maquinaria' ? (
-                <div className="rounded-lg border border-skyline-border bg-slate-50/70 p-3 md:col-span-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Gastos operacion mulita (captura aparte)
-                  </p>
-                  <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Nomina operador (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formNueva.mulitaNominaOperadorMensual}
-                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaNominaOperadorMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Diesel (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formNueva.mulitaDieselMensual}
-                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaDieselMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Horas extras (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formNueva.mulitaHorasExtrasMensual}
-                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaHorasExtrasMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Casetas (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formNueva.mulitaCasetasMensual}
-                        onChange={(e) => setFormNueva((f) => ({ ...f, mulitaCasetasMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                  </div>
-                </div>
-              ) : null}
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                 Estatus
                 <select
@@ -2250,59 +3340,6 @@ export function Unidades() {
                   />
                 </label>
               </div>
-              {formEditar.tipoUnidad === 'maquinaria' ? (
-                <div className="rounded-lg border border-skyline-border bg-slate-50/70 p-3 md:col-span-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Gastos operacion mulita (captura aparte)
-                  </p>
-                  <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Nomina operador (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formEditar.mulitaNominaOperadorMensual}
-                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaNominaOperadorMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Diesel (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formEditar.mulitaDieselMensual}
-                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaDieselMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Horas extras (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formEditar.mulitaHorasExtrasMensual}
-                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaHorasExtrasMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-medium text-gray-700">
-                      Casetas (MXN)
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formEditar.mulitaCasetasMensual}
-                        onChange={(e) => setFormEditar((f) => ({ ...f, mulitaCasetasMensual: e.target.value }))}
-                        placeholder="Opcional"
-                        className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
-                      />
-                    </label>
-                  </div>
-                </div>
-              ) : null}
               <div className="md:col-span-2">
                 <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                   Placas *

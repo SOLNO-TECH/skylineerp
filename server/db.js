@@ -66,6 +66,9 @@ export function initDb() {
     if (!cols.includes('curp')) db.exec('ALTER TABLE usuarios ADD COLUMN curp TEXT DEFAULT ""');
     if (!cols.includes('telefono')) db.exec('ALTER TABLE usuarios ADD COLUMN telefono TEXT DEFAULT ""');
     if (!cols.includes('avatar')) db.exec('ALTER TABLE usuarios ADD COLUMN avatar TEXT DEFAULT ""');
+    if (!cols.includes('vistas_permitidas')) {
+      db.exec('ALTER TABLE usuarios ADD COLUMN vistas_permitidas TEXT');
+    }
   } catch (err) {
     console.warn('Migración de perfil:', err?.message || err);
   }
@@ -305,10 +308,98 @@ function ensureUnidadesMulitaOperacionColumns() {
   }
 }
 
+let mulitaGastosSemanalesColsEnsured = false;
+function ensureMulitaGastosSemanalesColumns() {
+  if (mulitaGastosSemanalesColsEnsured) return;
+  try {
+    const tbl = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='mulita_gastos_semanales'")
+      .get();
+    if (!tbl) return;
+    const cols = db.prepare('PRAGMA table_info(mulita_gastos_semanales)').all().map((r) => r.name);
+    if (!cols.includes('faltas_dias_json')) {
+      db.exec("ALTER TABLE mulita_gastos_semanales ADD COLUMN faltas_dias_json TEXT DEFAULT '[]'");
+    }
+    if (!cols.includes('bono_puntualidad')) {
+      db.exec('ALTER TABLE mulita_gastos_semanales ADD COLUMN bono_puntualidad REAL');
+    }
+    if (!cols.includes('horas_extras_lineas_json')) {
+      db.exec("ALTER TABLE mulita_gastos_semanales ADD COLUMN horas_extras_lineas_json TEXT DEFAULT '[]'");
+    }
+    if (!cols.includes('extras_operaciones_lineas_json')) {
+      db.exec("ALTER TABLE mulita_gastos_semanales ADD COLUMN extras_operaciones_lineas_json TEXT DEFAULT '[]'");
+    }
+    if (!cols.includes('extras_operaciones_monto')) {
+      db.exec('ALTER TABLE mulita_gastos_semanales ADD COLUMN extras_operaciones_monto REAL');
+    }
+    if (!cols.includes('gastos_fijos_lineas_json')) {
+      db.exec("ALTER TABLE mulita_gastos_semanales ADD COLUMN gastos_fijos_lineas_json TEXT DEFAULT '[]'");
+    }
+    if (!cols.includes('gastos_fijos_monto')) {
+      db.exec('ALTER TABLE mulita_gastos_semanales ADD COLUMN gastos_fijos_monto REAL');
+    }
+    mulitaGastosSemanalesColsEnsured = true;
+  } catch (e) {
+    console.warn('Columnas mulita_gastos_semanales (faltas/bono):', e?.message);
+  }
+}
+
+let mulitaGastoMantenimientoTableEnsured = false;
+function ensureMulitaGastoMantenimientoTable() {
+  if (mulitaGastoMantenimientoTableEnsured) return;
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS mulita_gasto_mantenimiento (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        unidad_id INTEGER NOT NULL,
+        mantenimiento_id INTEGER NOT NULL,
+        fecha TEXT NOT NULL,
+        concepto TEXT NOT NULL,
+        cantidad REAL NOT NULL DEFAULT 0,
+        creado_en TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (unidad_id) REFERENCES unidades(id) ON DELETE CASCADE,
+        FOREIGN KEY (mantenimiento_id) REFERENCES mantenimiento(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_mulita_gasto_mant_unidad ON mulita_gasto_mantenimiento(unidad_id);
+      CREATE INDEX IF NOT EXISTS idx_mulita_gasto_mant_mtto ON mulita_gasto_mantenimiento(mantenimiento_id);
+    `);
+    mulitaGastoMantenimientoTableEnsured = true;
+  } catch (e) {
+    console.warn('Tabla mulita_gasto_mantenimiento:', e?.message);
+  }
+}
+
+let mulitaEvidenciasTableEnsured = false;
+function ensureMulitaEvidenciasTable() {
+  if (mulitaEvidenciasTableEnsured) return;
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS mulita_evidencias (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        unidad_id INTEGER NOT NULL,
+        semana_inicio TEXT,
+        nombre_archivo TEXT NOT NULL,
+        ruta TEXT NOT NULL,
+        descripcion TEXT DEFAULT '',
+        fecha_subida TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (unidad_id) REFERENCES unidades(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_mulita_evid_unidad ON mulita_evidencias(unidad_id);
+      CREATE INDEX IF NOT EXISTS idx_mulita_evid_semana ON mulita_evidencias(unidad_id, semana_inicio);
+    `);
+    mulitaEvidenciasTableEnsured = true;
+  } catch (e) {
+    console.warn('Tabla mulita_evidencias:', e?.message);
+  }
+}
+
 function ensureUnidadesReadWriteColumns() {
   ensureUnidadesMoneyColumns();
   ensureUnidadesPlacasMetadataColumns();
   ensureUnidadesMulitaOperacionColumns();
+  ensureMulitaGastosSemanalesColumns();
+  ensureMulitaGastoMantenimientoTable();
+  ensureMulitaEvidenciasTable();
 }
 
 function normalizePendientePlacasMotivo(v) {
@@ -1228,26 +1319,92 @@ export function getRentasPorMes(ano, mes) {
   }));
 }
 
+/** Rutas del menú lateral válidas para vistas de administrador (JSON en usuarios.vistas_permitidas). */
+const VISTAS_NAV_VALIDAS = new Set([
+  '/',
+  '/unidades',
+  '/clientes',
+  '/checkinout',
+  '/rentas',
+  '/pagos',
+  '/gastos',
+  '/mantenimiento',
+  '/administracion/proveedores',
+  '/reportes',
+  '/actividad',
+  '/usuarios',
+  '/configuracion',
+]);
+
+export function parseVistasPermitidasDb(raw) {
+  if (raw == null || raw === '') return null;
+  try {
+    const j = JSON.parse(raw);
+    if (!Array.isArray(j)) return null;
+    const uniq = [...new Set(j.filter((x) => typeof x === 'string').map((x) => x.trim()).filter(Boolean))];
+    return uniq.length ? uniq : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normaliza vistas para administrador: solo rutas del menú, siempre incluye inicio.
+ * Si el conjunto equivale a «todo el menú», devuelve null (acceso total clásico).
+ */
+export function normalizeVistasPermitidasAdmin(paths) {
+  if (paths == null) return null;
+  if (!Array.isArray(paths)) return null;
+  const filtered = [
+    ...new Set(
+      paths
+        .filter((p) => typeof p === 'string')
+        .map((p) => p.trim())
+        .filter((p) => VISTAS_NAV_VALIDAS.has(p))
+    ),
+  ];
+  if (filtered.length === 0) return null;
+  const withInicio = new Set(['/', ...filtered]);
+  const fullList = [...VISTAS_NAV_VALIDAS];
+  const isFull = fullList.every((p) => withInicio.has(p));
+  if (isFull) return null;
+  return [...withInicio].sort((a, b) => a.localeCompare(b, 'en'));
+}
+
 export function getUsuarioByEmail(email) {
   const e = String(email ?? '')
     .trim()
     .toLowerCase();
   if (!e) return undefined;
-  return db.prepare(
-    'SELECT id, email, password_hash, nombre, avatar, rol, activo FROM usuarios WHERE lower(trim(email)) = ?'
+  const row = db.prepare(
+    'SELECT id, email, password_hash, nombre, avatar, rol, activo, vistas_permitidas FROM usuarios WHERE lower(trim(email)) = ?'
   ).get(e);
+  if (!row) return undefined;
+  const { vistas_permitidas: rawV, ...rest } = row;
+  return { ...rest, vistasPermitidas: parseVistasPermitidasDb(rawV) };
 }
 
 export function getUsuarioById(id) {
-  return db.prepare(
-    'SELECT id, email, nombre, avatar, rol, activo, creado_en FROM usuarios WHERE id = ? AND activo = 1'
-  ).get(id);
+  const row = db
+    .prepare(
+      'SELECT id, email, nombre, avatar, rol, activo, creado_en, vistas_permitidas FROM usuarios WHERE id = ? AND activo = 1'
+    )
+    .get(id);
+  if (!row) return undefined;
+  const { vistas_permitidas: rawV, ...rest } = row;
+  return { ...rest, vistasPermitidas: parseVistasPermitidasDb(rawV) };
 }
 
 export function getAllUsuarios() {
-  return db.prepare(
-    'SELECT id, email, nombre, rol, activo, creado_en FROM usuarios ORDER BY nombre'
-  ).all();
+  const rows = db
+    .prepare(
+      'SELECT id, email, nombre, rol, activo, creado_en, vistas_permitidas FROM usuarios ORDER BY nombre'
+    )
+    .all();
+  return rows.map((r) => {
+    const { vistas_permitidas: rawV, ...rest } = r;
+    return { ...rest, vistasPermitidas: parseVistasPermitidasDb(rawV) };
+  });
 }
 
 /** Catálogo para asignar operador en rentas (usuarios activos con rol operador). */
@@ -1261,24 +1418,28 @@ export function getUsuariosCatalogoOperadores() {
 
 export function getUsuarioByIdAdmin(id) {
   const u = db.prepare(
-    'SELECT id, email, nombre, apellidos, rfc, curp, telefono, avatar, rol, activo, creado_en FROM usuarios WHERE id = ?'
+    'SELECT id, email, nombre, apellidos, rfc, curp, telefono, avatar, rol, activo, creado_en, vistas_permitidas FROM usuarios WHERE id = ?'
   ).get(id);
   if (!u) return null;
+  const { vistas_permitidas: rawV, ...rest } = u;
   return {
-    ...u,
+    ...rest,
     apellidos: u.apellidos || '',
     rfc: u.rfc || '',
     curp: u.curp || '',
     telefono: u.telefono || '',
     avatar: u.avatar || '',
+    vistasPermitidas: parseVistasPermitidasDb(rawV),
   };
 }
 
-export function createUsuario(email, passwordHash, nombre, rol, creadoPorId = null) {
+export function createUsuario(email, passwordHash, nombre, rol, creadoPorId = null, vistasPermitidas = null) {
+  const vistasNorm = rol === ROLES.ADMIN ? normalizeVistasPermitidasAdmin(vistasPermitidas) : null;
+  const vistasJson = vistasNorm && vistasNorm.length ? JSON.stringify(vistasNorm) : null;
   const run = db.prepare(
-    'INSERT INTO usuarios (email, password_hash, nombre, rol, activo) VALUES (?, ?, ?, ?, 1)'
+    'INSERT INTO usuarios (email, password_hash, nombre, rol, activo, vistas_permitidas) VALUES (?, ?, ?, ?, 1, ?)'
   );
-  const result = run.run(email, passwordHash, nombre, rol);
+  const result = run.run(email, passwordHash, nombre, rol, vistasJson);
   const newId = result.lastInsertRowid;
   registrarSistemaActividad({
     categoria: 'usuario',
@@ -1305,6 +1466,11 @@ export function updateUsuario(id, data, actorId = null) {
   if (data.rol != null) { updates.push('rol = ?'); values.push(data.rol); campos.push('rol'); }
   if (data.password_hash != null) { updates.push('password_hash = ?'); values.push(data.password_hash); campos.push('contraseña'); }
   if (data.activo != null) { updates.push('activo = ?'); values.push(data.activo ? 1 : 0); campos.push(data.activo ? 'reactivado' : 'desactivado'); }
+  if (data.vistas_permitidas !== undefined) {
+    updates.push('vistas_permitidas = ?');
+    values.push(data.vistas_permitidas);
+    campos.push('vistas permitidas');
+  }
   if (updates.length === 0) return;
   updates.push("actualizado_en = datetime('now')");
   values.push(id);
@@ -1496,12 +1662,203 @@ function normalizeSemanaInicio(v) {
   return t;
 }
 
+function isoAgregarDiasMulita(iso, dias) {
+  const t = String(iso || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
+  const d = new Date(`${t}T12:00:00`);
+  d.setDate(d.getDate() + dias);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+function parseFaltasDiasJson(raw) {
+  if (raw == null || raw === '') return [];
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((x) => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x));
+  } catch {
+    return [];
+  }
+}
+
+function normalizarFaltasParaSemana(semanaInicio, diasInput) {
+  const permitidos = new Set();
+  for (let i = 0; i < 7; i++) {
+    const x = isoAgregarDiasMulita(semanaInicio, i);
+    if (x) permitidos.add(x);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const x of diasInput || []) {
+    if (typeof x !== 'string') continue;
+    const d = x.trim();
+    if (!permitidos.has(d) || seen.has(d)) continue;
+    seen.add(d);
+    out.push(d);
+  }
+  out.sort();
+  return out;
+}
+
+function diasPermitidosSemanaMulita(semanaInicio) {
+  const permitidos = new Set();
+  for (let i = 0; i < 7; i++) {
+    const x = isoAgregarDiasMulita(semanaInicio, i);
+    if (x) permitidos.add(x);
+  }
+  return permitidos;
+}
+
+function parseHorasExtrasLineasJson(raw) {
+  if (raw == null || raw === '') return [];
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((o) => o && typeof o === 'object')
+      .map((o) => ({
+        fecha: typeof o.fecha === 'string' ? o.fecha.trim() : '',
+        horas: Number(o.horas),
+        precioPorHora: Number(o.precioPorHora),
+      }))
+      .filter(
+        (o) =>
+          /^\d{4}-\d{2}-\d{2}$/.test(o.fecha) &&
+          Number.isFinite(o.horas) &&
+          o.horas >= 0 &&
+          Number.isFinite(o.precioPorHora) &&
+          o.precioPorHora >= 0
+      );
+  } catch {
+    return [];
+  }
+}
+
+/** Filtra a días de la semana y ordena por fecha. */
+function normalizarHorasExtrasLineasParaSemana(semanaInicio, lineasInput) {
+  const permitidos = diasPermitidosSemanaMulita(semanaInicio);
+  const out = [];
+  for (const o of lineasInput || []) {
+    if (!o || typeof o !== 'object') continue;
+    const fecha = typeof o.fecha === 'string' ? o.fecha.trim() : '';
+    const horas = Number(o.horas);
+    const precioPorHora = Number(o.precioPorHora ?? o.precio_por_hora);
+    if (!permitidos.has(fecha)) continue;
+    if (!Number.isFinite(horas) || horas <= 0) continue;
+    if (!Number.isFinite(precioPorHora) || precioPorHora < 0) continue;
+    out.push({ fecha, horas, precioPorHora });
+  }
+  out.sort((a, b) => a.fecha.localeCompare(b.fecha));
+  return out;
+}
+
+function totalMxnHorasExtrasLineas(lineas) {
+  let s = 0;
+  for (const o of lineas || []) {
+    s += (Number(o.horas) || 0) * (Number(o.precioPorHora) || 0);
+  }
+  return Math.round(s * 100) / 100;
+}
+
+/** Si no hay JSON pero sí total legado, devuelve una línea estimada 1 × total para la UI. */
+function horasExtrasLineasParaRespuesta(semanaInicio, row) {
+  const fromJson = normalizarHorasExtrasLineasParaSemana(
+    semanaInicio,
+    parseHorasExtrasLineasJson(row.horas_extras_lineas_json)
+  );
+  if (fromJson.length > 0) return fromJson;
+  const legacy = Number(row.horas_extras) || 0;
+  if (legacy > 0 && semanaInicio) {
+    return [{ fecha: semanaInicio, horas: 1, precioPorHora: Math.round(legacy * 100) / 100 }];
+  }
+  return [];
+}
+
+function parseExtrasOperacionesLineasJson(raw) {
+  if (raw == null || raw === '') return [];
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((o) => o && typeof o === 'object')
+      .map((o) => ({
+        fecha: typeof o.fecha === 'string' ? o.fecha.trim() : '',
+        concepto: typeof o.concepto === 'string' ? o.concepto.trim().slice(0, 200) : '',
+        cantidad: Number(o.cantidad),
+      }))
+      .filter(
+        (o) =>
+          /^\d{4}-\d{2}-\d{2}$/.test(o.fecha) &&
+          o.concepto.length > 0 &&
+          Number.isFinite(o.cantidad) &&
+          o.cantidad >= 0
+      );
+  } catch {
+    return [];
+  }
+}
+
+function normalizarExtrasOperacionesLineasParaSemana(semanaInicio, lineasInput) {
+  const permitidos = diasPermitidosSemanaMulita(semanaInicio);
+  const out = [];
+  for (const o of lineasInput || []) {
+    if (!o || typeof o !== 'object') continue;
+    const fecha = typeof o.fecha === 'string' ? o.fecha.trim() : '';
+    const concepto = String(o.concepto ?? '')
+      .trim()
+      .slice(0, 200);
+    const cantidad = Number(o.cantidad);
+    if (!permitidos.has(fecha)) continue;
+    if (!concepto) continue;
+    if (!Number.isFinite(cantidad) || cantidad < 0) continue;
+    out.push({ fecha, concepto, cantidad });
+  }
+  out.sort((a, b) => (a.fecha + a.concepto).localeCompare(b.fecha + b.concepto));
+  return out;
+}
+
+function totalMxnExtrasOperacionesLineas(lineas) {
+  let s = 0;
+  for (const o of lineas || []) {
+    s += Number(o.cantidad) || 0;
+  }
+  return Math.round(s * 100) / 100;
+}
+
+function extrasOperacionesLineasParaRespuesta(semanaInicio, row) {
+  const fromJson = normalizarExtrasOperacionesLineasParaSemana(
+    semanaInicio,
+    parseExtrasOperacionesLineasJson(row.extras_operaciones_lineas_json)
+  );
+  if (fromJson.length > 0) return fromJson;
+  const legacy = Number(row.extras_operaciones_monto) || 0;
+  if (legacy > 0 && semanaInicio) {
+    return [{ fecha: semanaInicio, concepto: 'Importe previo', cantidad: Math.round(legacy * 100) / 100 }];
+  }
+  return [];
+}
+
+/** Misma forma que extras operación: fecha, concepto, cantidad (MXN), fechas dentro de la semana. */
+function gastosFijosLineasParaRespuesta(semanaInicio, row) {
+  return normalizarExtrasOperacionesLineasParaSemana(
+    semanaInicio,
+    parseExtrasOperacionesLineasJson(row.gastos_fijos_lineas_json)
+  );
+}
+
 function totalMulitaSemanalRow(r) {
+  const faltas = parseFaltasDiasJson(r.faltas_dias_json);
+  const bono = faltas.length > 0 ? 0 : Number(r.bono_puntualidad) || 0;
   return (
     (Number(r.nomina_operador) || 0) +
     (Number(r.diesel) || 0) +
     (Number(r.horas_extras) || 0) +
-    (Number(r.casetas) || 0)
+    (Number(r.extras_operaciones_monto) || 0) +
+    (Number(r.gastos_fijos_monto) || 0) +
+    bono
   );
 }
 
@@ -1511,7 +1868,14 @@ export function getMulitaGastosSemana(semanaInicio) {
   if (!semana) return [];
   const rows = db
     .prepare(
-      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas
+      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas,
+              COALESCE(notas, '') as notas,
+              COALESCE(faltas_dias_json, '[]') AS faltas_dias_json, bono_puntualidad,
+              COALESCE(horas_extras_lineas_json, '[]') AS horas_extras_lineas_json,
+              COALESCE(extras_operaciones_lineas_json, '[]') AS extras_operaciones_lineas_json,
+              COALESCE(extras_operaciones_monto, 0) AS extras_operaciones_monto,
+              COALESCE(gastos_fijos_lineas_json, '[]') AS gastos_fijos_lineas_json,
+              COALESCE(gastos_fijos_monto, 0) AS gastos_fijos_monto
        FROM mulita_gastos_semanales
        WHERE semana_inicio = ?
        ORDER BY unidad_id`
@@ -1524,7 +1888,18 @@ export function getMulitaGastosSemana(semanaInicio) {
     nominaOperador: r.nomina_operador != null ? Number(r.nomina_operador) : null,
     diesel: r.diesel != null ? Number(r.diesel) : null,
     horasExtras: r.horas_extras != null ? Number(r.horas_extras) : null,
-    casetas: r.casetas != null ? Number(r.casetas) : null,
+    horasExtrasLineas: horasExtrasLineasParaRespuesta(semana, r),
+    extrasOperacionesMonto: Number(r.extras_operaciones_monto) || 0,
+    extrasOperacionesLineas: extrasOperacionesLineasParaRespuesta(semana, r),
+    gastosFijosMonto: Number(r.gastos_fijos_monto) || 0,
+    gastosFijosLineas: gastosFijosLineasParaRespuesta(semana, r),
+    faltasDias: normalizarFaltasParaSemana(semana, parseFaltasDiasJson(r.faltas_dias_json)),
+    bonoPuntualidad:
+      parseFaltasDiasJson(r.faltas_dias_json).length > 0
+        ? 0
+        : r.bono_puntualidad != null
+          ? Number(r.bono_puntualidad)
+          : null,
     notas: r.notas || '',
     totalSemanal: Math.round(totalMulitaSemanalRow(r) * 100) / 100,
   }));
@@ -1545,24 +1920,104 @@ export function upsertMulitaGastoSemana(unidadId, data, usuarioId = null) {
   if (!semana) return null;
   const nomina = coerceOptionalMoneyUnidad(data?.nominaOperador ?? data?.nomina_operador);
   const diesel = coerceOptionalMoneyUnidad(data?.diesel);
-  const horas = coerceOptionalMoneyUnidad(data?.horasExtras ?? data?.horas_extras);
-  const casetas = coerceOptionalMoneyUnidad(data?.casetas);
+  const casetas = null;
   const notas = String(data?.notas || '').trim();
+  let rawLineas = data?.horasExtrasLineas ?? data?.horas_extras_lineas;
+  if (typeof rawLineas === 'string') {
+    try {
+      rawLineas = JSON.parse(rawLineas);
+    } catch {
+      rawLineas = null;
+    }
+  }
+  let lineasNorm;
+  let horasMxn;
+  if (Array.isArray(rawLineas)) {
+    lineasNorm = normalizarHorasExtrasLineasParaSemana(semana, rawLineas);
+    horasMxn = totalMxnHorasExtrasLineas(lineasNorm);
+  } else {
+    horasMxn = coerceOptionalMoneyUnidad(data?.horasExtras ?? data?.horas_extras);
+    lineasNorm = [];
+  }
+  const lineasJson = JSON.stringify(lineasNorm);
+  let rawFaltas = data?.faltasDias ?? data?.faltas_dias;
+  if (typeof rawFaltas === 'string') {
+    try {
+      rawFaltas = JSON.parse(rawFaltas);
+    } catch {
+      rawFaltas = [];
+    }
+  }
+  if (!Array.isArray(rawFaltas)) rawFaltas = [];
+  const faltasNorm = normalizarFaltasParaSemana(semana, rawFaltas);
+  const faltasJson = JSON.stringify(faltasNorm);
+  let bono = coerceOptionalMoneyUnidad(data?.bonoPuntualidad ?? data?.bono_puntualidad);
+  if (faltasNorm.length > 0) bono = 0;
+  let rawExtrasOp = data?.extrasOperacionesLineas ?? data?.extras_operaciones_lineas;
+  if (typeof rawExtrasOp === 'string') {
+    try {
+      rawExtrasOp = JSON.parse(rawExtrasOp);
+    } catch {
+      rawExtrasOp = null;
+    }
+  }
+  let extrasOpNorm;
+  let extrasOpMxn;
+  if (Array.isArray(rawExtrasOp)) {
+    extrasOpNorm = normalizarExtrasOperacionesLineasParaSemana(semana, rawExtrasOp);
+    extrasOpMxn = totalMxnExtrasOperacionesLineas(extrasOpNorm);
+  } else {
+    extrasOpMxn = coerceOptionalMoneyUnidad(data?.extrasOperacionesMonto ?? data?.extras_operaciones_monto);
+    extrasOpNorm = [];
+  }
+  const extrasOpJson = JSON.stringify(extrasOpNorm);
+  let rawFijos = data?.gastosFijosLineas ?? data?.gastos_fijos_lineas;
+  if (typeof rawFijos === 'string') {
+    try {
+      rawFijos = JSON.parse(rawFijos);
+    } catch {
+      rawFijos = null;
+    }
+  }
+  let fijosNorm;
+  let fijosMxn;
+  if (Array.isArray(rawFijos)) {
+    fijosNorm = normalizarExtrasOperacionesLineasParaSemana(semana, rawFijos);
+    fijosMxn = totalMxnExtrasOperacionesLineas(fijosNorm);
+  } else {
+    const fb = coerceOptionalMoneyUnidad(data?.gastosFijosMonto ?? data?.gastos_fijos_monto);
+    fijosMxn = fb != null ? fb : 0;
+    fijosNorm = [];
+  }
+  const fijosJson = JSON.stringify(fijosNorm);
   db.prepare(
     `INSERT INTO mulita_gastos_semanales
-       (unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, notas)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+       (unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, notas, faltas_dias_json, bono_puntualidad, horas_extras_lineas_json, extras_operaciones_lineas_json, extras_operaciones_monto, gastos_fijos_lineas_json, gastos_fijos_monto)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(unidad_id, semana_inicio) DO UPDATE SET
        nomina_operador = excluded.nomina_operador,
        diesel = excluded.diesel,
        horas_extras = excluded.horas_extras,
        casetas = excluded.casetas,
        notas = excluded.notas,
+       faltas_dias_json = excluded.faltas_dias_json,
+       bono_puntualidad = excluded.bono_puntualidad,
+       horas_extras_lineas_json = excluded.horas_extras_lineas_json,
+       extras_operaciones_lineas_json = excluded.extras_operaciones_lineas_json,
+       extras_operaciones_monto = excluded.extras_operaciones_monto,
+       gastos_fijos_lineas_json = excluded.gastos_fijos_lineas_json,
+       gastos_fijos_monto = excluded.gastos_fijos_monto,
        actualizado_en = datetime('now')`
-  ).run(uid, semana, nomina, diesel, horas, casetas, notas);
+  ).run(uid, semana, nomina, diesel, horasMxn, casetas, notas, faltasJson, bono, lineasJson, extrasOpJson, extrasOpMxn, fijosJson, fijosMxn);
   const row = db
     .prepare(
-      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas
+      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas,
+              COALESCE(faltas_dias_json, '[]') AS faltas_dias_json, bono_puntualidad,
+              COALESCE(horas_extras_lineas_json, '[]') AS horas_extras_lineas_json,
+              COALESCE(extras_operaciones_lineas_json, '[]') AS extras_operaciones_lineas_json,
+              COALESCE(extras_operaciones_monto, 0) AS extras_operaciones_monto,
+              COALESCE(gastos_fijos_lineas_json, '[]') AS gastos_fijos_lineas_json,
+              COALESCE(gastos_fijos_monto, 0) AS gastos_fijos_monto
        FROM mulita_gastos_semanales WHERE unidad_id = ? AND semana_inicio = ?`
     )
     .get(uid, semana);
@@ -1580,7 +2035,18 @@ export function upsertMulitaGastoSemana(unidadId, data, usuarioId = null) {
     nominaOperador: row.nomina_operador != null ? Number(row.nomina_operador) : null,
     diesel: row.diesel != null ? Number(row.diesel) : null,
     horasExtras: row.horas_extras != null ? Number(row.horas_extras) : null,
-    casetas: row.casetas != null ? Number(row.casetas) : null,
+    horasExtrasLineas: horasExtrasLineasParaRespuesta(semana, row),
+    extrasOperacionesMonto: Number(row.extras_operaciones_monto) || 0,
+    extrasOperacionesLineas: extrasOperacionesLineasParaRespuesta(semana, row),
+    gastosFijosMonto: Number(row.gastos_fijos_monto) || 0,
+    gastosFijosLineas: gastosFijosLineasParaRespuesta(semana, row),
+    faltasDias: normalizarFaltasParaSemana(semana, parseFaltasDiasJson(row.faltas_dias_json)),
+    bonoPuntualidad:
+      parseFaltasDiasJson(row.faltas_dias_json).length > 0
+        ? 0
+        : row.bono_puntualidad != null
+          ? Number(row.bono_puntualidad)
+          : null,
     notas: row.notas || '',
     totalSemanal: Math.round(totalMulitaSemanalRow(row) * 100) / 100,
   };
@@ -1593,24 +2059,251 @@ export function getMulitaGastosHistorialUnidad(unidadId, limit = 12) {
   const lim = Math.min(Math.max(1, Number(limit) || 12), 52);
   const rows = db
     .prepare(
-      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas
+      `SELECT id, unidad_id, semana_inicio, nomina_operador, diesel, horas_extras, casetas, COALESCE(notas, '') as notas,
+              COALESCE(faltas_dias_json, '[]') AS faltas_dias_json, bono_puntualidad,
+              COALESCE(horas_extras_lineas_json, '[]') AS horas_extras_lineas_json,
+              COALESCE(extras_operaciones_lineas_json, '[]') AS extras_operaciones_lineas_json,
+              COALESCE(extras_operaciones_monto, 0) AS extras_operaciones_monto,
+              COALESCE(gastos_fijos_lineas_json, '[]') AS gastos_fijos_lineas_json,
+              COALESCE(gastos_fijos_monto, 0) AS gastos_fijos_monto
        FROM mulita_gastos_semanales
        WHERE unidad_id = ?
        ORDER BY semana_inicio DESC
        LIMIT ?`
     )
     .all(uid, lim);
+  return rows.map((r) => {
+    const sem = r.semana_inicio;
+    return {
+      id: String(r.id),
+      unidadId: String(r.unidad_id),
+      semanaInicio: r.semana_inicio,
+      nominaOperador: r.nomina_operador != null ? Number(r.nomina_operador) : null,
+      diesel: r.diesel != null ? Number(r.diesel) : null,
+      horasExtras: r.horas_extras != null ? Number(r.horas_extras) : null,
+      horasExtrasLineas: horasExtrasLineasParaRespuesta(sem, r),
+      extrasOperacionesMonto: Number(r.extras_operaciones_monto) || 0,
+      extrasOperacionesLineas: extrasOperacionesLineasParaRespuesta(sem, r),
+      gastosFijosMonto: Number(r.gastos_fijos_monto) || 0,
+      gastosFijosLineas: gastosFijosLineasParaRespuesta(sem, r),
+      faltasDias: normalizarFaltasParaSemana(sem, parseFaltasDiasJson(r.faltas_dias_json)),
+      bonoPuntualidad:
+        parseFaltasDiasJson(r.faltas_dias_json).length > 0
+          ? 0
+          : r.bono_puntualidad != null
+            ? Number(r.bono_puntualidad)
+            : null,
+      notas: r.notas || '',
+      totalSemanal: Math.round(totalMulitaSemanalRow(r) * 100) / 100,
+    };
+  });
+}
+
+export function getMulitaGastosMantenimientoPorUnidad(unidadId) {
+  ensureMulitaGastoMantenimientoTable();
+  const uid = Number(unidadId);
+  if (!Number.isFinite(uid) || uid < 1) return [];
+  const u = db
+    .prepare(`SELECT id, COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad FROM unidades WHERE id = ? AND activo = 1`)
+    .get(uid);
+  if (!u || u.tipo_unidad !== 'maquinaria') return [];
+  const rows = db
+    .prepare(
+      `SELECT mg.id, mg.unidad_id, mg.mantenimiento_id, mg.fecha, mg.concepto, mg.cantidad, mg.creado_en,
+              m.tipo as mantenimiento_tipo, COALESCE(NULLIF(TRIM(m.descripcion), ''), '') as mantenimiento_descripcion
+       FROM mulita_gasto_mantenimiento mg
+       INNER JOIN mantenimiento m ON m.id = mg.mantenimiento_id
+       WHERE mg.unidad_id = ?
+       ORDER BY mg.fecha DESC, mg.id DESC`
+    )
+    .all(uid);
   return rows.map((r) => ({
     id: String(r.id),
     unidadId: String(r.unidad_id),
-    semanaInicio: r.semana_inicio,
-    nominaOperador: r.nomina_operador != null ? Number(r.nomina_operador) : null,
-    diesel: r.diesel != null ? Number(r.diesel) : null,
-    horasExtras: r.horas_extras != null ? Number(r.horas_extras) : null,
-    casetas: r.casetas != null ? Number(r.casetas) : null,
-    notas: r.notas || '',
-    totalSemanal: Math.round(totalMulitaSemanalRow(r) * 100) / 100,
+    mantenimientoId: String(r.mantenimiento_id),
+    fecha: r.fecha,
+    concepto: r.concepto || '',
+    cantidad: Number(r.cantidad) || 0,
+    creadoEn: r.creado_en || '',
+    mantenimientoTipo: r.mantenimiento_tipo || '',
+    mantenimientoDescripcion: r.mantenimiento_descripcion || '',
   }));
+}
+
+export function createMulitaGastoMantenimiento(unidadId, data, usuarioId = null) {
+  ensureMulitaGastoMantenimientoTable();
+  const uid = Number(unidadId);
+  const mid = Number(data?.mantenimientoId ?? data?.mantenimiento_id);
+  if (!Number.isFinite(uid) || uid < 1 || !Number.isFinite(mid) || mid < 1) return null;
+  const unidad = db
+    .prepare(`SELECT id, placas, COALESCE(numero_economico, '') as numero_economico, COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad FROM unidades WHERE id = ? AND activo = 1`)
+    .get(uid);
+  if (!unidad || unidad.tipo_unidad !== 'maquinaria') return null;
+  const m = db.prepare('SELECT id, unidad_id FROM mantenimiento WHERE id = ?').get(mid);
+  if (!m || Number(m.unidad_id) !== uid) return null;
+  const fecha = String(data?.fecha || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return null;
+  const concepto = String(data?.concepto || '').trim().slice(0, 200);
+  if (!concepto) return null;
+  const cantidad = Number(data?.cantidad);
+  if (!Number.isFinite(cantidad) || cantidad < 0) return null;
+  const res = db
+    .prepare(
+      `INSERT INTO mulita_gasto_mantenimiento (unidad_id, mantenimiento_id, fecha, concepto, cantidad) VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(uid, mid, fecha, concepto, Math.round(cantidad * 100) / 100);
+  const id = res.lastInsertRowid;
+  logUnidadActividadRow(
+    uid,
+    'Gasto mulita vinculado a mantenimiento',
+    `${concepto.slice(0, 60)} · Mtto #${mid} · ${fecha}`,
+    'mdi:link-variant',
+    usuarioId
+  );
+  return getMulitaGastosMantenimientoPorUnidad(uid).find((x) => x.id === String(id)) ?? null;
+}
+
+export function updateMulitaGastoMantenimiento(lineId, data, usuarioId = null) {
+  ensureMulitaGastoMantenimientoTable();
+  const id = Number(lineId);
+  if (!Number.isFinite(id) || id < 1) return null;
+  const row = db.prepare('SELECT id, unidad_id FROM mulita_gasto_mantenimiento WHERE id = ?').get(id);
+  if (!row) return null;
+  const updates = [];
+  const vals = [];
+  if (data?.fecha != null) {
+    const f = String(data.fecha).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(f)) {
+      updates.push('fecha = ?');
+      vals.push(f);
+    }
+  }
+  if (data?.concepto != null) {
+    updates.push('concepto = ?');
+    vals.push(String(data.concepto).trim().slice(0, 200));
+  }
+  if (data?.cantidad != null) {
+    const c = Number(data.cantidad);
+    if (Number.isFinite(c) && c >= 0) {
+      updates.push('cantidad = ?');
+      vals.push(Math.round(c * 100) / 100);
+    }
+  }
+  if (data?.mantenimientoId != null || data?.mantenimiento_id != null) {
+    const mid = Number(data.mantenimientoId ?? data.mantenimiento_id);
+    if (Number.isFinite(mid) && mid > 0) {
+      const m = db.prepare('SELECT id, unidad_id FROM mantenimiento WHERE id = ?').get(mid);
+      if (m && Number(m.unidad_id) === Number(row.unidad_id)) {
+        updates.push('mantenimiento_id = ?');
+        vals.push(mid);
+      }
+    }
+  }
+  if (updates.length === 0) return getMulitaGastosMantenimientoPorUnidad(row.unidad_id).find((x) => x.id === String(id)) ?? null;
+  vals.push(id);
+  db.prepare(`UPDATE mulita_gasto_mantenimiento SET ${updates.join(', ')} WHERE id = ?`).run(...vals);
+  logUnidadActividadRow(row.unidad_id, 'Gasto mulita-mantenimiento actualizado', `#${id}`, 'mdi:pencil', usuarioId);
+  return getMulitaGastosMantenimientoPorUnidad(row.unidad_id).find((x) => x.id === String(id)) ?? null;
+}
+
+export function deleteMulitaGastoMantenimiento(lineId, usuarioId = null) {
+  ensureMulitaGastoMantenimientoTable();
+  const id = Number(lineId);
+  if (!Number.isFinite(id) || id < 1) return false;
+  const row = db.prepare('SELECT id, unidad_id FROM mulita_gasto_mantenimiento WHERE id = ?').get(id);
+  if (!row) return false;
+  db.prepare('DELETE FROM mulita_gasto_mantenimiento WHERE id = ?').run(id);
+  logUnidadActividadRow(row.unidad_id, 'Gasto mulita-mantenimiento eliminado', `#${id}`, 'mdi:delete', usuarioId);
+  return true;
+}
+
+export function getMulitaEvidenciasPorUnidad(unidadId, semanaInicio = null) {
+  ensureMulitaEvidenciasTable();
+  const uid = Number(unidadId);
+  if (!Number.isFinite(uid) || uid < 1) return [];
+  const u = db
+    .prepare(`SELECT id, COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad FROM unidades WHERE id = ? AND activo = 1`)
+    .get(uid);
+  if (!u || u.tipo_unidad !== 'maquinaria') return [];
+  const sem = semanaInicio != null && String(semanaInicio).trim() ? String(semanaInicio).trim() : null;
+  let rows;
+  if (sem && /^\d{4}-\d{2}-\d{2}$/.test(sem)) {
+    rows = db
+      .prepare(
+        `SELECT id, unidad_id, semana_inicio, nombre_archivo, ruta, descripcion, fecha_subida
+         FROM mulita_evidencias
+         WHERE unidad_id = ? AND (semana_inicio IS NULL OR semana_inicio = ?)
+         ORDER BY fecha_subida DESC`
+      )
+      .all(uid, sem);
+  } else {
+    rows = db
+      .prepare(
+        `SELECT id, unidad_id, semana_inicio, nombre_archivo, ruta, descripcion, fecha_subida
+         FROM mulita_evidencias
+         WHERE unidad_id = ?
+         ORDER BY fecha_subida DESC`
+      )
+      .all(uid);
+  }
+  return rows.map((r) => ({
+    id: String(r.id),
+    unidadId: String(r.unidad_id),
+    semanaInicio: r.semana_inicio || null,
+    nombreArchivo: r.nombre_archivo || '',
+    ruta: r.ruta || '',
+    descripcion: r.descripcion || '',
+    fechaSubida: r.fecha_subida || '',
+  }));
+}
+
+export function addMulitaEvidencia(unidadId, nombreArchivo, ruta, descripcion = '', semanaInicio = null, usuarioId = null) {
+  ensureMulitaEvidenciasTable();
+  const uid = Number(unidadId);
+  if (!Number.isFinite(uid) || uid < 1) return null;
+  const u = db
+    .prepare(`SELECT id, placas, COALESCE(tipo_unidad, 'remolque_seco') as tipo_unidad FROM unidades WHERE id = ? AND activo = 1`)
+    .get(uid);
+  if (!u || u.tipo_unidad !== 'maquinaria') return null;
+  let sem = null;
+  if (semanaInicio != null && String(semanaInicio).trim() && /^\d{4}-\d{2}-\d{2}$/.test(String(semanaInicio).trim())) {
+    sem = String(semanaInicio).trim();
+  }
+  const ins = db
+    .prepare(
+      `INSERT INTO mulita_evidencias (unidad_id, semana_inicio, nombre_archivo, ruta, descripcion) VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(uid, sem, nombreArchivo, ruta, String(descripcion || '').trim());
+  logUnidadActividadRow(uid, 'Evidencia mulita', nombreArchivo, 'mdi:camera', usuarioId);
+  const row = db
+    .prepare(
+      `SELECT id, unidad_id, semana_inicio, nombre_archivo, ruta, descripcion, fecha_subida FROM mulita_evidencias WHERE id = ?`
+    )
+    .get(ins.lastInsertRowid);
+  return row
+    ? {
+        id: String(row.id),
+        unidadId: String(row.unidad_id),
+        semanaInicio: row.semana_inicio || null,
+        nombreArchivo: row.nombre_archivo || '',
+        ruta: row.ruta || '',
+        descripcion: row.descripcion || '',
+        fechaSubida: row.fecha_subida || '',
+      }
+    : null;
+}
+
+export function deleteMulitaEvidencia(evidenciaId, usuarioId = null) {
+  ensureMulitaEvidenciasTable();
+  const id = Number(evidenciaId);
+  if (!Number.isFinite(id) || id < 1) return null;
+  const row = db
+    .prepare(`SELECT id, unidad_id, ruta, nombre_archivo FROM mulita_evidencias WHERE id = ?`)
+    .get(id);
+  if (!row) return null;
+  db.prepare('DELETE FROM mulita_evidencias WHERE id = ?').run(id);
+  logUnidadActividadRow(row.unidad_id, 'Evidencia mulita eliminada', row.nombre_archivo, 'mdi:image-off', usuarioId);
+  return { unidadId: String(row.unidad_id), ruta: row.ruta };
 }
 
 export function getAllUnidades() {
@@ -3404,9 +4097,16 @@ export function getReporteCuentasPorPagar() {
 
 /** Consolidado para Finanzas → Gastos: mantenimiento + mulitas + facturas y pagos a proveedores. */
 export function getFinanzasGastosResumen(limit = 200) {
+  ensureUnidadesReadWriteColumns();
   const lim = Math.min(Math.max(1, Number(limit) || 200), 500);
+  ensureMulitaGastoMantenimientoTable();
   const mant = db
-    .prepare(`SELECT COALESCE(SUM(m.costo), 0) AS s FROM mantenimiento m INNER JOIN unidades u ON u.id = m.unidad_id`)
+    .prepare(
+      `SELECT (
+         COALESCE((SELECT SUM(m.costo) FROM mantenimiento m INNER JOIN unidades u ON u.id = m.unidad_id AND u.activo = 1), 0) +
+         COALESCE((SELECT SUM(mg.cantidad) FROM mulita_gasto_mantenimiento mg INNER JOIN unidades u2 ON u2.id = mg.unidad_id AND u2.activo = 1), 0)
+       ) AS s`
+    )
     .get();
   const mul = db
     .prepare(
@@ -3414,7 +4114,9 @@ export function getFinanzasGastosResumen(limit = 200) {
          COALESCE(g.nomina_operador, 0) +
          COALESCE(g.diesel, 0) +
          COALESCE(g.horas_extras, 0) +
-         COALESCE(g.casetas, 0)
+         COALESCE(g.extras_operaciones_monto, 0) +
+         COALESCE(g.gastos_fijos_monto, 0) +
+         COALESCE(g.bono_puntualidad, 0)
        ), 0) AS s
        FROM mulita_gastos_semanales g
        INNER JOIN unidades u ON u.id = g.unidad_id
@@ -3455,7 +4157,9 @@ export function getFinanzasGastosResumen(limit = 200) {
                  COALESCE(g.nomina_operador, 0) +
                  COALESCE(g.diesel, 0) +
                  COALESCE(g.horas_extras, 0) +
-                 COALESCE(g.casetas, 0)
+                 COALESCE(g.extras_operaciones_monto, 0) +
+                 COALESCE(g.gastos_fijos_monto, 0) +
+                 COALESCE(g.bono_puntualidad, 0)
                ),
                NULL,
                u.placas,
@@ -3465,6 +4169,20 @@ export function getFinanzasGastosResumen(limit = 200) {
         INNER JOIN unidades u ON u.id = g.unidad_id
         WHERE u.activo = 1
           AND COALESCE(u.tipo_unidad, 'remolque_seco') = 'maquinaria'
+        UNION ALL
+        SELECT 'mulita_mantenimiento',
+               CAST(mg.id AS TEXT),
+               mg.fecha,
+               ('Mulita + mantenimiento · ' || COALESCE(NULLIF(TRIM(mg.concepto), ''), 'Sin concepto') ||
+                ' · Orden #' || mg.mantenimiento_id),
+               COALESCE(mg.cantidad, 0),
+               NULL,
+               u.placas,
+               NULL,
+               NULL
+        FROM mulita_gasto_mantenimiento mg
+        INNER JOIN unidades u ON u.id = mg.unidad_id
+        WHERE u.activo = 1 AND COALESCE(u.tipo_unidad, 'remolque_seco') = 'maquinaria'
         UNION ALL
         SELECT 'factura_proveedor',
                CAST(f.id AS TEXT),

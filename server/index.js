@@ -22,6 +22,13 @@ import {
   getMulitaGastosSemana,
   getMulitaGastosHistorialUnidad,
   upsertMulitaGastoSemana,
+  getMulitaGastosMantenimientoPorUnidad,
+  createMulitaGastoMantenimiento,
+  updateMulitaGastoMantenimiento,
+  deleteMulitaGastoMantenimiento,
+  getMulitaEvidenciasPorUnidad,
+  addMulitaEvidencia,
+  deleteMulitaEvidencia,
   setEstatusUnidad,
   addUnidadDocumento,
   deleteUnidadDocumento,
@@ -75,6 +82,7 @@ import {
   addClienteDocumento,
   deleteClienteDocumento,
   getUsuariosCatalogoOperadores,
+  normalizeVistasPermitidasAdmin,
 } from './db.js';
 import {
   login,
@@ -189,6 +197,26 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_, file, cb) => {
+    const ok = /^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype);
+    cb(null, ok);
+  },
+});
+
+const mulitaEvidenciaStorage = multer.diskStorage({
+  destination: (req, _file, cb) => {
+    const dir = join(UPLOADS_DIR, 'mulita-evidencias', String(req.params.unidadId));
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = (file.originalname.match(/\.\w+$/) || ['.jpg'])[0];
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const uploadMulitaEvidencia = multer({
+  storage: mulitaEvidenciaStorage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_, file, cb) => {
     const ok = /^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype);
@@ -396,7 +424,7 @@ app.get('/api/usuarios', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
 });
 
 app.post('/api/usuarios', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
-  const { email, password, nombre, rol } = req.body || {};
+  const { email, password, nombre, rol, vistasPermitidas } = req.body || {};
   if (!email || !password || !nombre || !rol) {
     return res.status(400).json({ error: 'Faltan email, contraseña, nombre o rol' });
   }
@@ -408,7 +436,8 @@ app.post('/api/usuarios', requireAuth, requireRole(ROLES.ADMIN), (req, res) => {
   }
   try {
     const hash = bcrypt.hashSync(password, 10);
-    const id = createUsuario(email, hash, nombre, rol, req.user.id);
+    const vistasArg = rol === ROLES.ADMIN ? vistasPermitidas : null;
+    const id = createUsuario(email, hash, nombre, rol, req.user.id, vistasArg);
     const user = getUsuarioByIdAdmin(Number(id));
     res.status(201).json({ usuario: user });
   } catch (err) {
@@ -426,7 +455,7 @@ app.put('/api/usuarios/:id', requireAuth, requireRole(ROLES.ADMIN), (req, res) =
   const id = Number(req.params.id);
   const user = getUsuarioByIdAdmin(id);
   if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-  const { nombre, apellidos, rfc, curp, telefono, rol, password, activo } = req.body || {};
+  const { nombre, apellidos, rfc, curp, telefono, rol, password, activo, vistasPermitidas } = req.body || {};
   const data = {};
   if (nombre != null) data.nombre = nombre;
   if (apellidos != null) data.apellidos = apellidos;
@@ -443,6 +472,13 @@ app.put('/api/usuarios/:id', requireAuth, requireRole(ROLES.ADMIN), (req, res) =
     data.password_hash = bcrypt.hashSync(password, 10);
   }
   if (activo !== undefined) data.activo = !!activo;
+  const finalRol = data.rol !== undefined ? data.rol : user.rol;
+  if (finalRol !== ROLES.ADMIN) {
+    data.vistas_permitidas = null;
+  } else if (Object.prototype.hasOwnProperty.call(req.body || {}, 'vistasPermitidas')) {
+    const norm = normalizeVistasPermitidasAdmin(vistasPermitidas);
+    data.vistas_permitidas = norm && norm.length ? JSON.stringify(norm) : null;
+  }
   try {
     updateUsuario(id, data, req.user.id);
     res.json({ usuario: getUsuarioByIdAdmin(id) });
@@ -749,8 +785,12 @@ app.put('/api/mulitas/:unidadId/gastos-semana', requireAuth, requireEdicionFlota
         nominaOperador: body.nominaOperador ?? body.nomina_operador,
         diesel: body.diesel,
         horasExtras: body.horasExtras ?? body.horas_extras,
-        casetas: body.casetas,
         notas: body.notas,
+        faltasDias: body.faltasDias ?? body.faltas_dias,
+        bonoPuntualidad: body.bonoPuntualidad ?? body.bono_puntualidad,
+        horasExtrasLineas: body.horasExtrasLineas ?? body.horas_extras_lineas,
+        extrasOperacionesLineas: body.extrasOperacionesLineas ?? body.extras_operaciones_lineas,
+        gastosFijosLineas: body.gastosFijosLineas ?? body.gastos_fijos_lineas,
       },
       req.user.id
     );
@@ -768,6 +808,92 @@ app.get('/api/mulitas/:unidadId/gastos-historial', requireAuth, (req, res) => {
     res.json({ gastos });
   } catch (err) {
     res.status(500).json({ error: 'Error al cargar historial de gastos semanales' });
+  }
+});
+
+app.get('/api/mulitas/:unidadId/gastos-mantenimiento', requireAuth, (req, res) => {
+  try {
+    const gastos = getMulitaGastosMantenimientoPorUnidad(req.params.unidadId);
+    res.json({ gastos });
+  } catch (err) {
+    console.error('GET gastos-mantenimiento mulita', err);
+    res.status(500).json({ error: 'Error al cargar gastos mulita vinculados a mantenimiento' });
+  }
+});
+
+app.post('/api/mulitas/:unidadId/gastos-mantenimiento', requireAuth, requireEdicionFlota, (req, res) => {
+  try {
+    const row = createMulitaGastoMantenimiento(req.params.unidadId, req.body || {}, req.user.id);
+    if (!row) return res.status(400).json({ error: 'Datos inválidos o la orden de mantenimiento no corresponde a la unidad' });
+    res.status(201).json({ gasto: row });
+  } catch (err) {
+    console.error('POST gastos-mantenimiento mulita', err);
+    res.status(500).json({ error: 'Error al registrar gasto' });
+  }
+});
+
+app.patch('/api/mulitas/:unidadId/gastos-mantenimiento/:lineId', requireAuth, requireEdicionFlota, (req, res) => {
+  try {
+    const row = updateMulitaGastoMantenimiento(req.params.lineId, req.body || {}, req.user.id);
+    if (!row) return res.status(400).json({ error: 'No se pudo actualizar el gasto' });
+    res.json({ gasto: row });
+  } catch (err) {
+    console.error('PATCH gastos-mantenimiento mulita', err);
+    res.status(500).json({ error: 'Error al actualizar gasto' });
+  }
+});
+
+app.delete('/api/mulitas/:unidadId/gastos-mantenimiento/:lineId', requireAuth, requireEdicionFlota, (req, res) => {
+  try {
+    const ok = deleteMulitaGastoMantenimiento(req.params.lineId, req.user.id);
+    if (!ok) return res.status(404).json({ error: 'Gasto no encontrado' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE gastos-mantenimiento mulita', err);
+    res.status(500).json({ error: 'Error al eliminar gasto' });
+  }
+});
+
+app.get('/api/mulitas/:unidadId/evidencias', requireAuth, (req, res) => {
+  try {
+    const sem = String(req.query?.semanaInicio ?? req.query?.semana_inicio ?? '').trim() || null;
+    const evidencias = getMulitaEvidenciasPorUnidad(req.params.unidadId, sem);
+    res.json({ evidencias });
+  } catch (err) {
+    console.error('GET evidencias mulita', err);
+    res.status(500).json({ error: 'Error al cargar evidencias' });
+  }
+});
+
+app.post('/api/mulitas/:unidadId/evidencias', requireAuth, requireEdicionFlota, uploadMulitaEvidencia.single('imagen'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
+  const descripcion = String(req.body?.descripcion || '').trim();
+  const semanaInicio = String(req.body?.semanaInicio ?? req.body?.semana_inicio ?? '').trim() || null;
+  const ruta = `mulita-evidencias/${req.params.unidadId}/${req.file.filename}`;
+  try {
+    const evidencia = addMulitaEvidencia(req.params.unidadId, req.file.originalname, ruta, descripcion, semanaInicio, req.user.id);
+    if (!evidencia) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Unidad mulita no válida' });
+    }
+    res.status(201).json({ evidencia });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    console.error('POST evidencias mulita', err);
+    res.status(500).json({ error: 'Error al subir evidencia' });
+  }
+});
+
+app.delete('/api/mulitas/:unidadId/evidencias/:evidenciaId', requireAuth, requireEdicionFlota, (req, res) => {
+  try {
+    const result = deleteMulitaEvidencia(req.params.evidenciaId, req.user.id);
+    if (!result) return res.status(404).json({ error: 'Evidencia no encontrada' });
+    const fp = join(UPLOADS_BASE, result.ruta);
+    if (existsSync(fp)) fs.unlinkSync(fp);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE evidencias mulita', err);
+    res.status(500).json({ error: 'Error al eliminar evidencia' });
   }
 });
 

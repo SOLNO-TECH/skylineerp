@@ -94,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasRole = useCallback(
     (...roles: string[]) => {
       if (!state.user) return false;
-      if (state.user.rol === 'administrador') return true;
+      if (state.user.rol === 'administrador' && !state.user.vistasPermitidas?.length) return true;
       return roles.includes(state.user.rol);
     },
     [state.user]

@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { puedeVerRutaSidebar } from '../nav/sidebarNav';
 
 type ProtectedRouteProps = {
   children: React.ReactNode;
@@ -24,8 +25,14 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
     return <Navigate to={`/login?from=${encodeURIComponent(from)}`} replace />;
   }
 
+  if (!puedeVerRutaSidebar(user, location.pathname)) {
+    return <Navigate to="/" replace />;
+  }
+
   if (allowedRoles && allowedRoles.length > 0) {
-    const hasAccess = user.rol === 'administrador' || allowedRoles.includes(user.rol);
+    const adminSinLimite = user.rol === 'administrador' && !user.vistasPermitidas?.length;
+    const hasAccess =
+      adminSinLimite || allowedRoles.includes(user.rol);
     if (!hasAccess) {
       return <Navigate to="/" replace />;
     }

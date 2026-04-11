@@ -25,9 +25,10 @@ export function login(email, password) {
     user: {
       id: user.id,
       email: user.email,
-      nombre: user.nombre,    
+      nombre: user.nombre,
       rol: user.rol,
       avatar: user.avatar || '',
+      vistasPermitidas: user.vistasPermitidas ?? null,
     },
   };
 }
@@ -43,6 +44,7 @@ export function verifyToken(token) {
     nombre: user.nombre,
     rol: user.rol,
     avatar: user.avatar || '',
+    vistasPermitidas: user.vistasPermitidas ?? null,
   };
   } catch {
     return null;

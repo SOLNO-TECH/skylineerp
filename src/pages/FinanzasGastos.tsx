@@ -58,6 +58,12 @@ const TIPO_META: Record<
     color: 'bg-violet-100 text-violet-900',
     icon: 'mdi:wrench',
   },
+  mulita_mantenimiento: {
+    label: 'Mulita + mantenimiento',
+    short: 'Mul+mtto',
+    color: 'bg-fuchsia-100 text-fuchsia-900',
+    icon: 'mdi:link-variant',
+  },
   operacion_mulita: {
     label: 'Operación mulita',
     short: 'Mulita',
@@ -151,8 +157,11 @@ export function FinanzasGastos() {
           <Icon icon="mdi:information-outline" className="mt-0.5 size-5 shrink-0 text-skyline-blue" aria-hidden />
           <span>
             <strong className="font-semibold text-slate-900">Cómo leer los importes:</strong> el total de{' '}
-            <em>mantenimiento</em> es la suma de costos capturados en el módulo de mantenimiento;{' '}
-            <em> operación mulitas</em> suma nómina operador, diésel, horas extras y casetas por unidad mulita. En proveedores,{' '}
+            <em>mantenimiento</em> incluye costos del módulo de mantenimiento más los gastos mulita vinculados a una orden de
+            mantenimiento;{' '}
+            <em>operación mulitas</em> suma nómina operador, diésel, horas extras, extras de operación, gastos fijos de operación y
+            bono de puntualidad por unidad mulita. En
+            proveedores,{' '}
             <em>facturado</em> es el monto de facturas activas; <em>pagado</em>, lo abonado; <em>saldo</em>, la diferencia
             (cuentas por pagar). En la tabla, una misma operación puede aparecer como factura y luego como uno o más pagos:
             no sumes ambos como “doble gasto” en un mismo análisis de caja.
@@ -181,7 +190,7 @@ export function FinanzasGastos() {
               <p className="mt-1 text-2xl font-bold tabular-nums text-indigo-900">
                 ${(tot?.operacionMulitas ?? 0).toLocaleString('es-MX')}
               </p>
-              <p className="mt-1 text-xs text-gray-500">Nómina, diésel, horas extras y casetas de mulitas</p>
+              <p className="mt-1 text-xs text-gray-500">Nómina, diésel, horas extras, extras operación y bono puntualidad</p>
             </div>
             <div className="rounded-xl border border-skyline-border bg-white p-4 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-wide text-skyline-muted">Proveedores facturado</p>
@@ -243,6 +252,7 @@ export function FinanzasGastos() {
                 >
                   <option value="todos">Todos</option>
                   <option value="mantenimiento">Mantenimiento</option>
+                  <option value="mulita_mantenimiento">Gastos mulita vinculados a mantenimiento</option>
                   <option value="operacion_mulita">Operación mulitas</option>
                   <option value="factura_proveedor">Facturas proveedor</option>
                   <option value="pago_proveedor">Pagos a proveedor</option>
@@ -324,7 +334,7 @@ export function FinanzasGastos() {
 
 function MovimientoRow({ m, rowIdx }: { m: FinanzasGastoMovimiento; rowIdx: number }) {
   const meta = TIPO_META[m.tipo];
-  const linkMantenimiento = m.tipo === 'mantenimiento';
+  const linkMantenimiento = m.tipo === 'mantenimiento' || m.tipo === 'mulita_mantenimiento';
   const linkProveedor = m.proveedorId != null && m.proveedorId !== '';
 
   return (

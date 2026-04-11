@@ -111,6 +111,8 @@ export type User = {
   nombre: string;
   rol: string;
   avatar?: string;
+  /** Solo administrador: rutas del menú permitidas; vacío/null = acceso total al menú. */
+  vistasPermitidas?: string[] | null;
 };
 
 export type PerfilData = User & {
@@ -284,7 +286,13 @@ export async function getUsuariosCatalogoOperadores(): Promise<UsuarioOperadorCa
   return data.usuarios ?? [];
 }
 
-export async function createUsuario(p: { email: string; password: string; nombre: string; rol: string }): Promise<UsuarioRow> {
+export async function createUsuario(p: {
+  email: string;
+  password: string;
+  nombre: string;
+  rol: string;
+  vistasPermitidas?: string[] | null;
+}): Promise<UsuarioRow> {
   const res = await fetchWithAuth(`${API_BASE}/usuarios`, {
     method: 'POST',
     body: JSON.stringify(p),
@@ -294,7 +302,10 @@ export async function createUsuario(p: { email: string; password: string; nombre
   return data.usuario!;
 }
 
-export async function updateUsuario(id: number, p: { nombre?: string; rol?: string; password?: string; activo?: boolean }): Promise<UsuarioRow> {
+export async function updateUsuario(
+  id: number,
+  p: { nombre?: string; rol?: string; password?: string; activo?: boolean; vistasPermitidas?: string[] | null }
+): Promise<UsuarioRow> {
   const res = await fetchWithAuth(`${API_BASE}/usuarios/${id}`, {
     method: 'PUT',
     body: JSON.stringify(p),
@@ -573,7 +584,12 @@ export async function getReporteProveedoresPorUnidadApi(): Promise<ReportePorUni
   return data.unidades ?? [];
 }
 
-export type FinanzasGastoMovimientoTipo = 'mantenimiento' | 'operacion_mulita' | 'factura_proveedor' | 'pago_proveedor';
+export type FinanzasGastoMovimientoTipo =
+  | 'mantenimiento'
+  | 'operacion_mulita'
+  | 'mulita_mantenimiento'
+  | 'factura_proveedor'
+  | 'pago_proveedor';
 
 export type FinanzasGastoMovimiento = {
   tipo: FinanzasGastoMovimientoTipo;
@@ -660,16 +676,62 @@ export type UnidadRow = {
 
 export type UnidadExpedienteFotoSlot = 'fm_anterior' | 'fm_vigente' | 'tarjeta_circulacion';
 
+export type MulitaHorasExtraLinea = {
+  fecha: string;
+  horas: number;
+  precioPorHora: number;
+};
+
+export type MulitaExtraOperacionLinea = {
+  fecha: string;
+  concepto: string;
+  cantidad: number;
+};
+
 export type MulitaGastoSemanalRow = {
   id: string;
   unidadId: string;
   semanaInicio: string;
   nominaOperador: number | null;
+  /** Gasto semanal de diésel (MXN). */
   diesel: number | null;
+  /** Total MXN = suma de (horas × precio/h) por línea. */
   horasExtras: number | null;
-  casetas: number | null;
+  /** Detalle por día de la semana (lun–dom de `semanaInicio`). */
+  horasExtrasLineas?: MulitaHorasExtraLinea[];
+  /** Suma MXN de extras de operación (mismo registro semanal que diésel y horas extras). */
+  extrasOperacionesMonto?: number;
+  extrasOperacionesLineas?: MulitaExtraOperacionLinea[];
+  /** Gastos fijos de operación mulita (misma semana; fecha, concepto, cantidad MXN). */
+  gastosFijosMonto?: number;
+  gastosFijosLineas?: MulitaExtraOperacionLinea[];
+  /** Días con falta (ISO `YYYY-MM-DD`) dentro de la semana (lun–dom). */
+  faltasDias?: string[];
+  bonoPuntualidad?: number | null;
   totalSemanal: number;
   notas?: string;
+};
+
+export type MulitaGastoMantenimientoRow = {
+  id: string;
+  unidadId: string;
+  mantenimientoId: string;
+  fecha: string;
+  concepto: string;
+  cantidad: number;
+  creadoEn?: string;
+  mantenimientoTipo?: string;
+  mantenimientoDescripcion?: string;
+};
+
+export type MulitaEvidenciaRow = {
+  id: string;
+  unidadId: string;
+  semanaInicio: string | null;
+  nombreArchivo: string;
+  ruta: string;
+  descripcion: string;
+  fechaSubida: string;
 };
 
 export async function getUnidades(): Promise<UnidadRow[]> {
@@ -701,8 +763,12 @@ export async function upsertMulitaGastoSemanaApi(
     nominaOperador?: number | null;
     diesel?: number | null;
     horasExtras?: number | null;
-    casetas?: number | null;
     notas?: string;
+    faltasDias?: string[];
+    bonoPuntualidad?: number | null;
+    horasExtrasLineas?: MulitaHorasExtraLinea[];
+    extrasOperacionesLineas?: MulitaExtraOperacionLinea[];
+    gastosFijosLineas?: MulitaExtraOperacionLinea[];
   }
 ): Promise<MulitaGastoSemanalRow> {
   const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/gastos-semana`, {
@@ -723,6 +789,88 @@ export async function getMulitaGastosHistorialUnidadApi(
   const data = await parseResponse<{ gastos?: MulitaGastoSemanalRow[]; error?: string }>(res);
   if (!res.ok) throw new Error(data.error || 'Error al cargar historial de gastos semanales');
   return data.gastos ?? [];
+}
+
+export async function getMulitaGastosMantenimientoUnidadApi(unidadId: string): Promise<MulitaGastoMantenimientoRow[]> {
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/gastos-mantenimiento`, { cache: 'no-store' });
+  const data = await parseResponse<{ gastos?: MulitaGastoMantenimientoRow[]; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al cargar gastos mulita–mantenimiento');
+  return data.gastos ?? [];
+}
+
+export async function createMulitaGastoMantenimientoApi(
+  unidadId: string,
+  p: { mantenimientoId: string; fecha: string; concepto: string; cantidad: number }
+): Promise<MulitaGastoMantenimientoRow> {
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/gastos-mantenimiento`, {
+    method: 'POST',
+    body: JSON.stringify(p),
+  });
+  const data = await parseResponse<{ gasto?: MulitaGastoMantenimientoRow; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al registrar gasto');
+  return data.gasto!;
+}
+
+export async function updateMulitaGastoMantenimientoApi(
+  unidadId: string,
+  lineId: string,
+  p: Partial<{ mantenimientoId: string; fecha: string; concepto: string; cantidad: number }>
+): Promise<MulitaGastoMantenimientoRow> {
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/gastos-mantenimiento/${lineId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(p),
+  });
+  const data = await parseResponse<{ gasto?: MulitaGastoMantenimientoRow; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al actualizar gasto');
+  return data.gasto!;
+}
+
+export async function deleteMulitaGastoMantenimientoApi(unidadId: string, lineId: string): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/gastos-mantenimiento/${lineId}`, { method: 'DELETE' });
+  const data = await parseResponse<{ error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al eliminar gasto');
+}
+
+export async function getMulitaEvidenciasApi(unidadId: string, semanaInicio?: string): Promise<MulitaEvidenciaRow[]> {
+  const q = new URLSearchParams();
+  if (semanaInicio) q.set('semanaInicio', semanaInicio);
+  const qs = q.toString();
+  const res = await fetchWithAuth(
+    `${API_BASE}/mulitas/${unidadId}/evidencias${qs ? `?${qs}` : ''}`,
+    { cache: 'no-store' }
+  );
+  const data = await parseResponse<{ evidencias?: MulitaEvidenciaRow[]; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al cargar evidencias');
+  return data.evidencias ?? [];
+}
+
+export async function uploadMulitaEvidenciaApi(
+  unidadId: string,
+  file: File,
+  opts?: { descripcion?: string; semanaInicio?: string | null }
+): Promise<MulitaEvidenciaRow> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('imagen', file);
+  if (opts?.descripcion) form.append('descripcion', opts.descripcion);
+  if (opts?.semanaInicio) form.append('semanaInicio', opts.semanaInicio);
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/mulitas/${unidadId}/evidencias`, {
+    method: 'POST',
+    headers,
+    body: form,
+    credentials: 'include',
+  });
+  const data = await parseResponse<{ evidencia?: MulitaEvidenciaRow; error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al subir evidencia');
+  return data.evidencia!;
+}
+
+export async function deleteMulitaEvidenciaApi(unidadId: string, evidenciaId: string): Promise<void> {
+  const res = await fetchWithAuth(`${API_BASE}/mulitas/${unidadId}/evidencias/${evidenciaId}`, { method: 'DELETE' });
+  const data = await parseResponse<{ error?: string }>(res);
+  if (!res.ok) throw new Error(data.error || 'Error al eliminar evidencia');
 }
 
 export async function createUnidad(p: {

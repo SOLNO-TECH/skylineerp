@@ -34,6 +34,10 @@ import {
 } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
+import {
+  SIDEBAR_NAV_SECTIONS,
+  SIDEBAR_PATHS_SELECCIONABLES,
+} from '../nav/sidebarNav';
 
 const ROLES_LABEL: Record<string, string> = {
   administrador: 'Administrador',
@@ -44,6 +48,14 @@ const ROLES_LABEL: Record<string, string> = {
 };
 
 type FiltroEstado = 'todos' | 'activos' | 'inactivos';
+
+const ROL_ADMIN = 'administrador';
+
+function ordenVistasSeleccion(paths: string[]): string[] {
+  const order = [...SIDEBAR_PATHS_SELECCIONABLES];
+  const set = new Set(paths);
+  return order.filter((p) => set.has(p));
+}
 
 export function Usuarios() {
   const { user: currentUser } = useAuth();
@@ -58,6 +70,9 @@ export function Usuarios() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ nombre: '', email: '', password: '', rol: 'operador', activo: true });
+  /** administrador: «full» = todas las vistas (null en servidor); «custom» = subset. */
+  const [adminMenuMode, setAdminMenuMode] = useState<'full' | 'custom'>('full');
+  const [adminPathsSeleccion, setAdminPathsSeleccion] = useState<string[]>(() => [...SIDEBAR_PATHS_SELECCIONABLES]);
   const [saving, setSaving] = useState(false);
   const [confirmDesactivar, setConfirmDesactivar] = useState<number | null>(null);
   const [confirmEliminar, setConfirmEliminar] = useState<number | null>(null);
@@ -114,12 +129,21 @@ export function Usuarios() {
   function openCreate() {
     setEditingId(null);
     setForm({ nombre: '', email: '', password: '', rol: 'operador', activo: true });
+    setAdminMenuMode('full');
+    setAdminPathsSeleccion([...SIDEBAR_PATHS_SELECCIONABLES]);
     setModalOpen(true);
   }
 
   function openEdit(u: UsuarioRow) {
     setEditingId(u.id);
     setForm({ nombre: u.nombre, email: u.email, password: '', rol: u.rol, activo: !!u.activo });
+    if (u.rol === ROL_ADMIN && u.vistasPermitidas && u.vistasPermitidas.length > 0) {
+      setAdminMenuMode('custom');
+      setAdminPathsSeleccion(ordenVistasSeleccion(u.vistasPermitidas));
+    } else {
+      setAdminMenuMode('full');
+      setAdminPathsSeleccion([...SIDEBAR_PATHS_SELECCIONABLES]);
+    }
     setModalOpen(true);
   }
 
@@ -128,22 +152,41 @@ export function Usuarios() {
     setEditingId(null);
   }
 
+  function computeVistasPermitidasPayload(): string[] | null {
+    if (form.rol !== ROL_ADMIN) return null;
+    if (adminMenuMode === 'full') return null;
+    const sel = ordenVistasSeleccion(adminPathsSeleccion);
+    if (sel.length === 0) return null;
+    if (sel.length >= SIDEBAR_PATHS_SELECCIONABLES.length) return null;
+    return sel;
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (form.rol === ROL_ADMIN && adminMenuMode === 'custom') {
+      const sel = ordenVistasSeleccion(adminPathsSeleccion);
+      if (sel.length === 0) {
+        toast('Selecciona al menos una vista del menú para este administrador.', 'error');
+        return;
+      }
+    }
     setSaving(true);
     setError(null);
+    const vistasPayload = computeVistasPermitidasPayload();
     const promise = editingId
       ? updateUsuario(editingId, {
           nombre: form.nombre,
           rol: form.rol,
           ...(form.password ? { password: form.password } : {}),
           activo: form.activo,
+          vistasPermitidas: vistasPayload,
         })
       : createUsuario({
           nombre: form.nombre,
           email: form.email,
           password: form.password,
           rol: form.rol,
+          ...(form.rol === ROL_ADMIN ? { vistasPermitidas: vistasPayload } : {}),
         });
     promise
       .then(() => {
@@ -374,9 +417,17 @@ export function Usuarios() {
                     </td>
                     <td className={`px-3 py-2.5 text-center align-middle text-slate-600 ${CRUD_CELDA_SEC}`}>{u.email}</td>
                     <td className="px-3 py-2.5 text-center align-middle">
-                      <span className="inline-flex rounded-full bg-skyline-blue/10 px-2.5 py-0.5 text-xs font-medium capitalize text-skyline-blue">
-                        {ROLES_LABEL[u.rol] ?? u.rol}
-                      </span>
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="inline-flex rounded-full bg-skyline-blue/10 px-2.5 py-0.5 text-xs font-medium capitalize text-skyline-blue">
+                          {ROLES_LABEL[u.rol] ?? u.rol}
+                        </span>
+                        {u.rol === ROL_ADMIN && u.vistasPermitidas && u.vistasPermitidas.length > 0 ? (
+                          <span className="inline-flex max-w-[11rem] items-center gap-0.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-900">
+                            <Icon icon="mdi:view-grid-outline" className="size-3 shrink-0" aria-hidden />
+                            Menú limitado
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className={`px-3 py-2.5 text-center align-middle ${CRUD_CELDA_SEC}`}>
                       {u.activo ? (
@@ -461,12 +512,17 @@ export function Usuarios() {
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !saving && closeModal()}>
           <div
-            className="w-full max-w-md rounded-lg border border-skyline-border bg-white p-6 shadow-lg"
+            className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-skyline-border bg-white p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="mb-4 text-lg font-semibold text-gray-900">
+            <h2 className="mb-1 text-lg font-semibold text-gray-900">
               {editingId ? 'Editar usuario' : 'Nuevo usuario'}
             </h2>
+            <p className="mb-4 text-sm text-slate-500">
+              {form.rol === ROL_ADMIN
+                ? 'Los administradores con menú personalizado solo ven las secciones que marques (sigue teniendo rol administrador en el sistema).'
+                : 'Asigna rol y datos de acceso.'}
+            </p>
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <label className="flex flex-col gap-1.5 text-sm font-medium text-gray-700">
                 Nombre
@@ -505,7 +561,14 @@ export function Usuarios() {
                 Rol
                 <select
                   value={form.rol}
-                  onChange={(e) => setForm((f) => ({ ...f, rol: e.target.value }))}
+                  onChange={(e) => {
+                    const nextRol = e.target.value;
+                    setForm((f) => ({ ...f, rol: nextRol }));
+                    if (nextRol !== ROL_ADMIN) {
+                      setAdminMenuMode('full');
+                      setAdminPathsSeleccion([...SIDEBAR_PATHS_SELECCIONABLES]);
+                    }
+                  }}
                   className="rounded-md border border-skyline-border px-3 py-2 outline-none focus:border-skyline-blue focus:ring-1 focus:ring-skyline-blue"
                 >
                   {roles.map((r) => (
@@ -513,6 +576,128 @@ export function Usuarios() {
                   ))}
                 </select>
               </label>
+
+              {form.rol === ROL_ADMIN && (
+                <div className="rounded-xl border border-skyline-border bg-gradient-to-br from-slate-50 to-sky-50/40 p-4 shadow-sm">
+                  <div className="mb-3 flex items-start gap-2">
+                    <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-skyline-blue/15 text-skyline-blue">
+                      <Icon icon="mdi:view-dashboard-variant" className="size-5" aria-hidden />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">Vistas del menú lateral</p>
+                      <p className="text-xs text-slate-500">
+                        Elige si ve todo el ERP o solo módulos concretos. El inicio y el perfil siempre están disponibles para quien inicia sesión.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-transparent p-2 transition-colors hover:bg-white/80 has-[:checked]:border-skyline-blue/40 has-[:checked]:bg-white">
+                      <input
+                        type="radio"
+                        name="adminMenuMode"
+                        className="mt-1"
+                        checked={adminMenuMode === 'full'}
+                        onChange={() => {
+                          setAdminMenuMode('full');
+                          setAdminPathsSeleccion([...SIDEBAR_PATHS_SELECCIONABLES]);
+                        }}
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-slate-800">Acceso completo al menú</span>
+                        <span className="block text-xs text-slate-500">Mismo comportamiento que un administrador clásico.</span>
+                      </span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-transparent p-2 transition-colors hover:bg-white/80 has-[:checked]:border-skyline-blue/40 has-[:checked]:bg-white">
+                      <input
+                        type="radio"
+                        name="adminMenuMode"
+                        className="mt-1"
+                        checked={adminMenuMode === 'custom'}
+                        onChange={() => setAdminMenuMode('custom')}
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-slate-800">Personalizar secciones</span>
+                        <span className="block text-xs text-slate-500">Activa o desactiva cada módulo con un toque.</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  {adminMenuMode === 'custom' && (
+                    <div className="mt-4 space-y-4">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          onClick={() => setAdminPathsSeleccion([...SIDEBAR_PATHS_SELECCIONABLES])}
+                        >
+                          Marcar todas
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          onClick={() => setAdminPathsSeleccion(['/'])}
+                        >
+                          Solo inicio
+                        </button>
+                      </div>
+                      {SIDEBAR_NAV_SECTIONS.map((section) => (
+                        <div key={section.title}>
+                          <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">{section.title}</p>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {section.items.map((item) => {
+                              const on = adminPathsSeleccion.includes(item.path);
+                              return (
+                                <button
+                                  key={item.path}
+                                  type="button"
+                                  onClick={() => {
+                                    setAdminPathsSeleccion((prev) => {
+                                      const wasOn = prev.includes(item.path);
+                                      if (wasOn) {
+                                        const next = prev.filter((p) => p !== item.path);
+                                        if (next.length === 0) {
+                                          toast('Debe quedar al menos una vista seleccionada.', 'error');
+                                          return prev;
+                                        }
+                                        return ordenVistasSeleccion(next);
+                                      }
+                                      return ordenVistasSeleccion([...prev, item.path]);
+                                    });
+                                  }}
+                                  className={`flex items-center gap-3 rounded-xl border-2 p-3 text-left transition-all ${
+                                    on
+                                      ? 'border-skyline-blue bg-white shadow-md ring-1 ring-skyline-blue/20'
+                                      : 'border-slate-200/80 bg-white/50 opacity-75 hover:border-slate-300 hover:opacity-100'
+                                  }`}
+                                >
+                                  <span
+                                    className={`flex size-10 shrink-0 items-center justify-center rounded-lg ${
+                                      on ? 'bg-skyline-blue text-white' : 'bg-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    <Icon icon={item.icon} className="size-5" aria-hidden />
+                                  </span>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-semibold text-slate-800">{item.label}</span>
+                                    <span className="block truncate font-mono text-[11px] text-slate-500">{item.path}</span>
+                                  </span>
+                                  <Icon
+                                    icon={on ? 'mdi:check-circle' : 'mdi:circle-outline'}
+                                    className={`size-6 shrink-0 ${on ? 'text-emerald-600' : 'text-slate-400'}`}
+                                    aria-hidden
+                                  />
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {editingId && (
                 <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
                   <input

@@ -2,71 +2,12 @@ import { useState, useEffect } from 'react';
 import { Icon } from '@iconify/react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import {
+  SIDEBAR_NAV_SECTIONS,
+  esAdministradorVistasRestringidas,
+} from '../../nav/sidebarNav';
 
 const STORAGE_KEY = 'skyline_sidebar_collapsed';
-
-const ROLES_CATALOGO_FLOTAS = ['administrador', 'supervisor', 'operador', 'consulta'] as const;
-const ROLES_ADMIN_FIN = ['administrador', 'supervisor'] as const;
-
-type NavLinkItem = {
-  path: string;
-  label: string;
-  icon: string;
-  /** Solo ruta exacta (p. ej. inicio). */
-  end?: boolean;
-  roles?: readonly string[];
-};
-
-type NavSection = {
-  title: string;
-  items: NavLinkItem[];
-};
-
-const NAV_SECTIONS: NavSection[] = [
-  {
-    title: 'OPERACIONES',
-    items: [
-      { path: '/', label: 'Inicio', icon: 'mdi:view-dashboard', end: true },
-      { path: '/unidades', label: 'Unidades', icon: 'mdi:car-side', roles: [...ROLES_CATALOGO_FLOTAS] },
-      { path: '/clientes', label: 'Clientes', icon: 'mdi:account-tie', roles: [...ROLES_CATALOGO_FLOTAS] },
-      { path: '/checkinout', label: 'Check-in / Check-out', icon: 'mdi:clipboard-check-outline' },
-    ],
-  },
-  {
-    title: 'FINANZAS',
-    items: [
-      { path: '/rentas', label: 'Rentas', icon: 'mdi:calendar-month', roles: [...ROLES_CATALOGO_FLOTAS] },
-      { path: '/pagos', label: 'Pagos', icon: 'mdi:cash-multiple', roles: [...ROLES_CATALOGO_FLOTAS] },
-      { path: '/gastos', label: 'Gastos', icon: 'mdi:chart-timeline-variant', roles: [...ROLES_ADMIN_FIN] },
-    ],
-  },
-  {
-    title: 'GESTIÓN',
-    items: [
-      { path: '/mantenimiento', label: 'Mantenimiento', icon: 'mdi:wrench' },
-      {
-        path: '/administracion/proveedores',
-        label: 'Proveedores',
-        icon: 'mdi:truck-delivery-outline',
-        roles: [...ROLES_ADMIN_FIN],
-      },
-    ],
-  },
-  {
-    title: 'ANÁLISIS',
-    items: [
-      { path: '/reportes', label: 'Reportes', icon: 'mdi:chart-box', roles: [...ROLES_ADMIN_FIN] },
-      { path: '/actividad', label: 'Actividad', icon: 'mdi:history', roles: [...ROLES_ADMIN_FIN] },
-    ],
-  },
-  {
-    title: 'SISTEMA',
-    items: [
-      { path: '/usuarios', label: 'Usuarios', icon: 'mdi:account-cog', roles: ['administrador'] },
-      { path: '/configuracion', label: 'Configuración', icon: 'mdi:cog', roles: ['administrador'] },
-    ],
-  },
-];
 
 type SidebarProps = {
   mobileOpen?: boolean;
@@ -104,11 +45,15 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
     } catch {}
   }, [collapsed]);
 
-  const filteredSections = NAV_SECTIONS.map((section) => ({
+  const filteredSections = SIDEBAR_NAV_SECTIONS.map((section) => ({
     title: section.title,
-    items: section.items.filter(
-      (item) => !('roles' in item && item.roles) || hasRole(...(item.roles ?? [])),
-    ),
+    items: section.items.filter((item) => {
+      if (user && esAdministradorVistasRestringidas(user)) {
+        return (user.vistasPermitidas ?? []).includes(item.path);
+      }
+      if (!('roles' in item) || !item.roles) return true;
+      return hasRole(...item.roles);
+    }),
   })).filter((s) => s.items.length > 0);
 
   function handleLogout() {
