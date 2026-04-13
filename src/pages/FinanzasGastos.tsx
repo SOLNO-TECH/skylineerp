@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Icon } from '@iconify/react';
 import {
   getFinanzasGastosResumenApi,
@@ -92,12 +92,31 @@ function formatearFecha(s: string) {
 
 type FiltroTipo = 'todos' | FinanzasGastoMovimientoTipo;
 
+const TIPOS_GASTO_QUERY: Set<FiltroTipo> = new Set([
+  'todos',
+  'mantenimiento',
+  'mulita_mantenimiento',
+  'operacion_mulita',
+  'factura_proveedor',
+  'pago_proveedor',
+]);
+
+function filtroTipoDesdeQuery(v: string | null): FiltroTipo {
+  if (v && TIPOS_GASTO_QUERY.has(v as FiltroTipo)) return v as FiltroTipo;
+  return 'todos';
+}
+
 export function FinanzasGastos() {
+  const [searchParams] = useSearchParams();
   const [data, setData] = useState<FinanzasGastosResumen | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busqueda, setBusqueda] = useState('');
-  const [filtroTipo, setFiltroTipo] = useState<FiltroTipo>('todos');
+  const [filtroTipo, setFiltroTipo] = useState<FiltroTipo>(() => filtroTipoDesdeQuery(searchParams.get('tipo')));
+
+  useEffect(() => {
+    setFiltroTipo(filtroTipoDesdeQuery(searchParams.get('tipo')));
+  }, [searchParams]);
 
   useEffect(() => {
     let cancel = false;

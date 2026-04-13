@@ -1,9 +1,30 @@
 import { sugerenciaModalidadCheckin } from './tipoUnidadCatalogo';
+import {
+  CAJA_REF_ST_DANOS_CARROCERIA,
+  CAJA_REF_ST_SECCIONES,
+  PICKUP_DANOS_CARROCERIA,
+  PICKUP_SECCIONES,
+  VEH_EMP_DANOS_CARROCERIA,
+  VEH_EMP_SECCIONES,
+  POS_LLANTAS_PICKUP_VEH,
+  type InspeccionCajaRefSinTermo,
+  type InspeccionPickup,
+  type InspeccionVehiculoEmpresarial,
+} from './checkinModalidadesExtras';
 
 /** Estados tipo hoja física: ✔ / X / N/A */
 export type Tri = '' | 'ok' | 'mal' | 'na';
 
-export type ModalidadInspeccion = 'caja_seca' | 'refrigerado' | 'mulita_patio' | 'plataforma' | 'dolly';
+export type ModalidadInspeccion =
+  | 'caja_seca'
+  | 'refrigerado'
+  | 'mulita_patio'
+  | 'plataforma'
+  | 'dolly'
+  | 'camion_tracto'
+  | 'caja_ref_sin_termo'
+  | 'pickup'
+  | 'vehiculo_empresarial';
 
 export const MODALIDAD_LABEL: Record<ModalidadInspeccion, string> = {
   caja_seca: 'Caja seca (remolque)',
@@ -11,6 +32,10 @@ export const MODALIDAD_LABEL: Record<ModalidadInspeccion, string> = {
   mulita_patio: 'Mulita de patio',
   plataforma: 'Hoja de inspección – Plataforma',
   dolly: 'Hoja de inspección – Dolly',
+  camion_tracto: 'Hoja de inspección – Camión / tracto',
+  caja_ref_sin_termo: 'Hoja de inspección – Caja refrigerada (sin termo)',
+  pickup: 'Hoja de inspección – Pickup',
+  vehiculo_empresarial: 'Hoja de inspección – Vehículo empresarial',
 };
 
 export type InspeccionHeader = {
@@ -22,6 +47,10 @@ export type InspeccionHeader = {
   hojaPlacas: string;
   hojaKm: string;
   hojaMarca: string;
+  /** Modelo en hoja (p. ej. camión / tracto). */
+  hojaModelo: string;
+  /** Año en hoja (p. ej. camión / tracto). */
+  hojaAnio: string;
   hojaTipo: string;
   camion: string;
   nivelCombustibleEscala: string;
@@ -429,6 +458,318 @@ function defaultDollyInspeccion(): InspeccionDolly {
   };
 }
 
+/** HOJA DE INSPECCIÓN – CAMIÓN / TRACTO: daños de carrocería (X). */
+export const CAMION_TRACTO_DANOS_CARROCERIA: { id: string; label: string }[] = [
+  { id: 'cct_dan_cabina', label: 'Cabina (frente)' },
+  { id: 'cct_dan_lizq', label: 'Lado izquierdo' },
+  { id: 'cct_dan_lder', label: 'Lado derecho' },
+  { id: 'cct_dan_defensa', label: 'Defensa' },
+  { id: 'cct_dan_cofre', label: 'Cofre' },
+  { id: 'cct_dan_puertas', label: 'Puertas' },
+  { id: 'cct_dan_espejos', label: 'Espejos' },
+  { id: 'cct_dan_parabrisas', label: 'Parabrisas' },
+  { id: 'cct_dan_techo', label: 'Techo' },
+];
+
+export type CamionTractoRevisionKey =
+  | 'motor'
+  | 'frenos'
+  | 'suspension'
+  | 'transmision'
+  | 'sistemaAcople'
+  | 'chequeoRutina'
+  | 'interiorCabina'
+  | 'condicionesGenerales';
+
+export const CAMION_TRACTO_SECCIONES_REVISION: {
+  key: CamionTractoRevisionKey;
+  titulo: string;
+  items: { id: string; label: string }[];
+}[] = [
+  {
+    key: 'motor',
+    titulo: 'Motor',
+    items: [
+      { id: 'cct_mot_aceite', label: 'Nivel de aceite' },
+      { id: 'cct_mot_fuga_aceite', label: 'Fugas de aceite' },
+      { id: 'cct_mot_fuga_anti', label: 'Fugas de anticongelante' },
+      { id: 'cct_mot_bandas', label: 'Bandas' },
+      { id: 'cct_mot_filtros', label: 'Filtros' },
+      { id: 'cct_mot_bateria', label: 'Batería' },
+      { id: 'cct_mot_electrico', label: 'Sistema eléctrico' },
+    ],
+  },
+  {
+    key: 'frenos',
+    titulo: 'Sistema de frenos',
+    items: [
+      { id: 'cct_fr_balatas', label: 'Balatas' },
+      { id: 'cct_fr_discos', label: 'Discos / tambores' },
+      { id: 'cct_fr_lineas', label: 'Líneas de aire' },
+      { id: 'cct_fr_valvulas', label: 'Válvulas' },
+      { id: 'cct_fr_abs', label: 'Sistema ABS' },
+    ],
+  },
+  {
+    key: 'suspension',
+    titulo: 'Suspensión',
+    items: [
+      { id: 'cct_sus_muelles', label: 'Muelles / bolsas de aire' },
+      { id: 'cct_sus_amort', label: 'Amortiguadores' },
+      { id: 'cct_sus_ejes', label: 'Ejes' },
+      { id: 'cct_sus_dir', label: 'Dirección' },
+    ],
+  },
+  {
+    key: 'transmision',
+    titulo: 'Transmisión',
+    items: [
+      { id: 'cct_tr_caja', label: 'Caja de velocidades' },
+      { id: 'cct_tr_embrague', label: 'Embrague' },
+      { id: 'cct_tr_cardan', label: 'Flecha cardán' },
+      { id: 'cct_tr_dif', label: 'Diferencial' },
+    ],
+  },
+  {
+    key: 'sistemaAcople',
+    titulo: 'Sistema de acople',
+    items: [
+      { id: 'cct_ac_quinta', label: 'Quinta rueda' },
+      { id: 'cct_ac_seguro', label: 'Seguro de quinta rueda' },
+      { id: 'cct_ac_engrase', label: 'Engrase' },
+      { id: 'cct_ac_perno', label: 'Perno rey (revisión visual)' },
+    ],
+  },
+  {
+    key: 'chequeoRutina',
+    titulo: 'Chequeo de rutina importante',
+    items: [
+      { id: 'cct_rut_luces_del', label: 'Luces delanteras' },
+      { id: 'cct_rut_luces_tras', label: 'Luces traseras' },
+      { id: 'cct_rut_direccionales', label: 'Direccionales' },
+      { id: 'cct_rut_freno', label: 'Luces de freno' },
+      { id: 'cct_rut_reversa', label: 'Luces de reversa' },
+      { id: 'cct_rut_torretas', label: 'Torretas (si aplica)' },
+      { id: 'cct_rut_claxon', label: 'Claxon' },
+      { id: 'cct_rut_limpia', label: 'Limpiaparabrisas' },
+      { id: 'cct_rut_tablero', label: 'Tablero (testigos)' },
+    ],
+  },
+  {
+    key: 'interiorCabina',
+    titulo: 'Interior de cabina',
+    items: [
+      { id: 'cct_int_asiento', label: 'Asiento conductor' },
+      { id: 'cct_int_cinturon', label: 'Cinturón de seguridad' },
+      { id: 'cct_int_ac', label: 'Aire acondicionado' },
+      { id: 'cct_int_tablero', label: 'Tablero' },
+      { id: 'cct_int_controles', label: 'Controles' },
+      { id: 'cct_int_extintor', label: 'Extintor' },
+      { id: 'cct_int_botiquin', label: 'Botiquín' },
+    ],
+  },
+  {
+    key: 'condicionesGenerales',
+    titulo: 'Condiciones generales — revisión de',
+    items: [
+      { id: 'cct_cond_fugas', label: 'Fugas (aceite / aire / anticongelante)' },
+      { id: 'cct_cond_ruidos', label: 'Ruidos anormales' },
+      { id: 'cct_cond_vib', label: 'Vibraciones' },
+    ],
+  },
+];
+
+export type InspeccionCamionTracto = {
+  danosCarroceria: Record<string, Tri>;
+  motor: Record<string, Tri>;
+  frenos: Record<string, Tri>;
+  suspension: Record<string, Tri>;
+  transmision: Record<string, Tri>;
+  sistemaAcople: Record<string, Tri>;
+  chequeoRutina: Record<string, Tri>;
+  interiorCabina: Record<string, Tri>;
+  condicionesGenerales: Record<string, Tri>;
+  llantas: PlataformaLlantaFila[];
+  descripcionDanos: string;
+  observacionesGenerales: string;
+};
+
+function emptyCamionTractoLlantas(): PlataformaLlantaFila[] {
+  return Array.from({ length: 10 }, () => ({
+    posicion: '',
+    marca: '',
+    medida: '',
+    estado: '',
+    sellos: '',
+  }));
+}
+
+function defaultCamionTractoInspeccion(): InspeccionCamionTracto {
+  const danosCarroceria = triRecord(CAMION_TRACTO_DANOS_CARROCERIA.map((x) => x.id));
+  const secciones: Pick<
+    InspeccionCamionTracto,
+    | 'motor'
+    | 'frenos'
+    | 'suspension'
+    | 'transmision'
+    | 'sistemaAcople'
+    | 'chequeoRutina'
+    | 'interiorCabina'
+    | 'condicionesGenerales'
+  > = {
+    motor: {},
+    frenos: {},
+    suspension: {},
+    transmision: {},
+    sistemaAcople: {},
+    chequeoRutina: {},
+    interiorCabina: {},
+    condicionesGenerales: {},
+  };
+  for (const sec of CAMION_TRACTO_SECCIONES_REVISION) {
+    const bucket = secciones[sec.key] as Record<string, Tri>;
+    for (const it of sec.items) bucket[it.id] = '';
+  }
+  return {
+    danosCarroceria,
+    ...secciones,
+    llantas: emptyCamionTractoLlantas(),
+    descripcionDanos: '',
+    observacionesGenerales: '',
+  };
+}
+
+function emptyCajaRefStLlantas(): InspeccionCajaRefSinTermo['llantas'] {
+  return Array.from({ length: 8 }, () => ({
+    posicion: '',
+    marca: '',
+    medida: '',
+    estado: '',
+    sellos: '',
+  }));
+}
+
+function defaultCajaRefSinTermoInspeccion(): InspeccionCajaRefSinTermo {
+  const danosCarroceria = triRecord(CAJA_REF_ST_DANOS_CARROCERIA.map((x) => x.id));
+  const secciones: Pick<
+    InspeccionCajaRefSinTermo,
+    | 'paredFrontal'
+    | 'paredLatDer'
+    | 'paredLatIzq'
+    | 'areaTrasera'
+    | 'areaInterior'
+    | 'areaInferior'
+    | 'suspension'
+    | 'chequeoRutina'
+    | 'filtraciones'
+    | 'aislamiento'
+  > = {
+    paredFrontal: {},
+    paredLatDer: {},
+    paredLatIzq: {},
+    areaTrasera: {},
+    areaInterior: {},
+    areaInferior: {},
+    suspension: {},
+    chequeoRutina: {},
+    filtraciones: {},
+    aislamiento: {},
+  };
+  for (const sec of CAJA_REF_ST_SECCIONES) {
+    const bucket = secciones[sec.key] as Record<string, Tri>;
+    for (const it of sec.items) bucket[it.id] = '';
+  }
+  return {
+    danosCarroceria,
+    ...secciones,
+    llantas: emptyCajaRefStLlantas(),
+    descripcionDanos: '',
+    observacionesGenerales: '',
+  };
+}
+
+function emptyPickupVehLlantas(): InspeccionPickup['llantas'] {
+  return POS_LLANTAS_PICKUP_VEH.map((posicion) => ({
+    posicion,
+    marca: '',
+    medida: '',
+    estado: '',
+    sellos: '',
+  }));
+}
+
+function defaultPickupInspeccion(): InspeccionPickup {
+  const danosCarroceria = triRecord(PICKUP_DANOS_CARROCERIA.map((x) => x.id));
+  const secciones: Pick<
+    InspeccionPickup,
+    | 'motor'
+    | 'frenos'
+    | 'suspension'
+    | 'transmision'
+    | 'chequeoRutina'
+    | 'interior'
+    | 'cajaBatea'
+    | 'condicionesGenerales'
+  > = {
+    motor: {},
+    frenos: {},
+    suspension: {},
+    transmision: {},
+    chequeoRutina: {},
+    interior: {},
+    cajaBatea: {},
+    condicionesGenerales: {},
+  };
+  for (const sec of PICKUP_SECCIONES) {
+    const bucket = secciones[sec.key] as Record<string, Tri>;
+    for (const it of sec.items) bucket[it.id] = '';
+  }
+  return {
+    danosCarroceria,
+    ...secciones,
+    llantas: emptyPickupVehLlantas(),
+    descripcionDanos: '',
+    observacionesGenerales: '',
+  };
+}
+
+function defaultVehiculoEmpresarialInspeccion(): InspeccionVehiculoEmpresarial {
+  const danosCarroceria = triRecord(VEH_EMP_DANOS_CARROCERIA.map((x) => x.id));
+  const secciones: Pick<
+    InspeccionVehiculoEmpresarial,
+    | 'motor'
+    | 'frenos'
+    | 'suspension'
+    | 'transmision'
+    | 'chequeoRutina'
+    | 'interior'
+    | 'cajuela'
+    | 'condicionesGenerales'
+    | 'documentacion'
+  > = {
+    motor: {},
+    frenos: {},
+    suspension: {},
+    transmision: {},
+    chequeoRutina: {},
+    interior: {},
+    cajuela: {},
+    condicionesGenerales: {},
+    documentacion: {},
+  };
+  for (const sec of VEH_EMP_SECCIONES) {
+    const bucket = secciones[sec.key] as Record<string, Tri>;
+    for (const it of sec.items) bucket[it.id] = '';
+  }
+  return {
+    danosCarroceria,
+    ...secciones,
+    llantas: emptyPickupVehLlantas(),
+    descripcionDanos: '',
+    observacionesGenerales: '',
+  };
+}
+
 export type InspeccionCompleta = {
   header: InspeccionHeader;
   cajaSeca: InspeccionCajaSeca;
@@ -436,6 +777,10 @@ export type InspeccionCompleta = {
   mulita: InspeccionMulita;
   plataforma: InspeccionPlataforma;
   dolly: InspeccionDolly;
+  camionTracto: InspeccionCamionTracto;
+  cajaRefSinTermo: InspeccionCajaRefSinTermo;
+  pickup: InspeccionPickup;
+  vehiculoEmpresarial: InspeccionVehiculoEmpresarial;
 };
 
 /** Checklist alineado con la hoja física SKYLINE · caja seca (✔ / X / N/A). */
@@ -746,6 +1091,8 @@ export function defaultInspeccionCompleta(): InspeccionCompleta {
       hojaPlacas: '',
       hojaKm: '',
       hojaMarca: '',
+      hojaModelo: '',
+      hojaAnio: '',
       hojaTipo: '',
       camion: '',
       nivelCombustibleEscala: '',
@@ -806,6 +1153,10 @@ export function defaultInspeccionCompleta(): InspeccionCompleta {
     },
     plataforma: defaultPlataformaInspeccion(),
     dolly: defaultDollyInspeccion(),
+    camionTracto: defaultCamionTractoInspeccion(),
+    cajaRefSinTermo: defaultCajaRefSinTermoInspeccion(),
+    pickup: defaultPickupInspeccion(),
+    vehiculoEmpresarial: defaultVehiculoEmpresarialInspeccion(),
   };
 }
 
@@ -898,9 +1249,118 @@ export function mergeInspeccionGuardada(raw: unknown): InspeccionCompleta {
         observacionesGenerales: d.observacionesGenerales ?? bd.observacionesGenerales,
       };
     })(),
+    camionTracto: (() => {
+      const bc = base.camionTracto;
+      const oc = o.camionTracto;
+      if (!oc || typeof oc !== 'object') return bc;
+      const c = oc as Partial<InspeccionCamionTracto>;
+      return {
+        danosCarroceria: { ...bc.danosCarroceria, ...(c.danosCarroceria || {}) },
+        motor: { ...bc.motor, ...(c.motor || {}) },
+        frenos: { ...bc.frenos, ...(c.frenos || {}) },
+        suspension: { ...bc.suspension, ...(c.suspension || {}) },
+        transmision: { ...bc.transmision, ...(c.transmision || {}) },
+        sistemaAcople: { ...bc.sistemaAcople, ...(c.sistemaAcople || {}) },
+        chequeoRutina: { ...bc.chequeoRutina, ...(c.chequeoRutina || {}) },
+        interiorCabina: { ...bc.interiorCabina, ...(c.interiorCabina || {}) },
+        condicionesGenerales: { ...bc.condicionesGenerales, ...(c.condicionesGenerales || {}) },
+        llantas:
+          Array.isArray(c.llantas) && c.llantas.length === bc.llantas.length
+            ? c.llantas.map((r, i) => ({ ...bc.llantas[i], ...r }))
+            : bc.llantas,
+        descripcionDanos: c.descripcionDanos ?? bc.descripcionDanos,
+        observacionesGenerales: c.observacionesGenerales ?? bc.observacionesGenerales,
+      };
+    })(),
+    cajaRefSinTermo: (() => {
+      const b = base.cajaRefSinTermo;
+      const ox = o.cajaRefSinTermo;
+      if (!ox || typeof ox !== 'object') return b;
+      const x = ox as Partial<InspeccionCajaRefSinTermo>;
+      return {
+        danosCarroceria: { ...b.danosCarroceria, ...(x.danosCarroceria || {}) },
+        paredFrontal: { ...b.paredFrontal, ...(x.paredFrontal || {}) },
+        paredLatDer: { ...b.paredLatDer, ...(x.paredLatDer || {}) },
+        paredLatIzq: { ...b.paredLatIzq, ...(x.paredLatIzq || {}) },
+        areaTrasera: { ...b.areaTrasera, ...(x.areaTrasera || {}) },
+        areaInterior: { ...b.areaInterior, ...(x.areaInterior || {}) },
+        areaInferior: { ...b.areaInferior, ...(x.areaInferior || {}) },
+        suspension: { ...b.suspension, ...(x.suspension || {}) },
+        chequeoRutina: { ...b.chequeoRutina, ...(x.chequeoRutina || {}) },
+        filtraciones: { ...b.filtraciones, ...(x.filtraciones || {}) },
+        aislamiento: { ...b.aislamiento, ...(x.aislamiento || {}) },
+        llantas:
+          Array.isArray(x.llantas) && x.llantas.length === b.llantas.length
+            ? x.llantas.map((r, i) => ({ ...b.llantas[i], ...r }))
+            : b.llantas,
+        descripcionDanos: x.descripcionDanos ?? b.descripcionDanos,
+        observacionesGenerales: x.observacionesGenerales ?? b.observacionesGenerales,
+      };
+    })(),
+    pickup: (() => {
+      const b = base.pickup;
+      const ox = o.pickup;
+      if (!ox || typeof ox !== 'object') return b;
+      const x = ox as Partial<InspeccionPickup>;
+      return {
+        danosCarroceria: { ...b.danosCarroceria, ...(x.danosCarroceria || {}) },
+        motor: { ...b.motor, ...(x.motor || {}) },
+        frenos: { ...b.frenos, ...(x.frenos || {}) },
+        suspension: { ...b.suspension, ...(x.suspension || {}) },
+        transmision: { ...b.transmision, ...(x.transmision || {}) },
+        chequeoRutina: { ...b.chequeoRutina, ...(x.chequeoRutina || {}) },
+        interior: { ...b.interior, ...(x.interior || {}) },
+        cajaBatea: { ...b.cajaBatea, ...(x.cajaBatea || {}) },
+        condicionesGenerales: { ...b.condicionesGenerales, ...(x.condicionesGenerales || {}) },
+        llantas:
+          Array.isArray(x.llantas) && x.llantas.length === b.llantas.length
+            ? x.llantas.map((r, i) => ({ ...b.llantas[i], ...r }))
+            : b.llantas,
+        descripcionDanos: x.descripcionDanos ?? b.descripcionDanos,
+        observacionesGenerales: x.observacionesGenerales ?? b.observacionesGenerales,
+      };
+    })(),
+    vehiculoEmpresarial: (() => {
+      const b = base.vehiculoEmpresarial;
+      const ox = o.vehiculoEmpresarial;
+      if (!ox || typeof ox !== 'object') return b;
+      const x = ox as Partial<InspeccionVehiculoEmpresarial>;
+      return {
+        danosCarroceria: { ...b.danosCarroceria, ...(x.danosCarroceria || {}) },
+        motor: { ...b.motor, ...(x.motor || {}) },
+        frenos: { ...b.frenos, ...(x.frenos || {}) },
+        suspension: { ...b.suspension, ...(x.suspension || {}) },
+        transmision: { ...b.transmision, ...(x.transmision || {}) },
+        chequeoRutina: { ...b.chequeoRutina, ...(x.chequeoRutina || {}) },
+        interior: { ...b.interior, ...(x.interior || {}) },
+        cajuela: { ...b.cajuela, ...(x.cajuela || {}) },
+        condicionesGenerales: { ...b.condicionesGenerales, ...(x.condicionesGenerales || {}) },
+        documentacion: { ...b.documentacion, ...(x.documentacion || {}) },
+        llantas:
+          Array.isArray(x.llantas) && x.llantas.length === b.llantas.length
+            ? x.llantas.map((r, i) => ({ ...b.llantas[i], ...r }))
+            : b.llantas,
+        descripcionDanos: x.descripcionDanos ?? b.descripcionDanos,
+        observacionesGenerales: x.observacionesGenerales ?? b.observacionesGenerales,
+      };
+    })(),
   };
 }
 
 export function defaultModalidadPorTipoUnidad(tipoUnidad?: string): ModalidadInspeccion {
   return sugerenciaModalidadCheckin(tipoUnidad);
 }
+
+export {
+  CAJA_REF_ST_DANOS_CARROCERIA,
+  CAJA_REF_ST_SECCIONES,
+  PICKUP_DANOS_CARROCERIA,
+  PICKUP_SECCIONES,
+  VEH_EMP_DANOS_CARROCERIA,
+  VEH_EMP_SECCIONES,
+} from './checkinModalidadesExtras';
+export type {
+  CajaRefSinTermoRevisionKey,
+  PickupRevisionKey,
+  VehiculoEmpresarialRevisionKey,
+} from './checkinModalidadesExtras';

@@ -1,5 +1,6 @@
 import { Icon } from '@iconify/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   CRUD_CELDA_PRIMARIO,
   CRUD_CELDA_SEC,
@@ -1583,6 +1584,21 @@ export function Unidades() {
             )}
           </div>
 
+          {mulitasOrdenadas.length > 0 ? (
+            <div className="border-t border-fuchsia-100 bg-fuchsia-50/60 px-4 py-3 text-center text-xs text-fuchsia-950 sm:px-6">
+              <span className="font-medium">Gastos de mulita (mantenimiento):</span>{' '}
+              al pulsar <strong className="font-semibold">Editar gastos</strong> o la fila de una unidad, en el panel verás la
+              sección <strong className="font-semibold">debajo de «Extras de operación»</strong> (fecha, concepto, MXN vinculados a
+              una orden de mantenimiento).{' '}
+              <Link
+                to="/finanzas/gastos?tipo=mulita_mantenimiento"
+                className="font-semibold text-skyline-blue underline decoration-skyline-blue/40 underline-offset-2"
+              >
+                Ver en Finanzas → Gastos
+              </Link>
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-skyline-border bg-gray-50/80 px-5 py-3 sm:px-6">
             <p className="text-sm text-gray-600">
               {unidadesMulitas.length > 0 && totalGastosTodasMulitas !== null ? (
@@ -1754,157 +1770,6 @@ export function Unidades() {
                             </dd>
                           </div>
                         </dl>
-                      </div>
-
-                      <div className={secBox}>
-                        <div className={secTitle}>Gastos mulita vinculados a mantenimiento</div>
-                        <p className="mb-3 text-xs text-slate-500">
-                          Cada registro enlaza una orden de mantenimiento de esta unidad (fecha, concepto e importe en MXN). Se
-                          reflejan en el total de <strong className="font-medium text-slate-700">mantenimiento</strong> en Finanzas.
-                        </p>
-                        {mulitaDrawerAuxLoading ? (
-                          <p className="text-xs text-slate-500">Cargando…</p>
-                        ) : mulitaDrawerMantenimientos.length === 0 ? (
-                          <p className="text-xs text-amber-800">
-                            No hay órdenes de mantenimiento para esta unidad. Registra una en el módulo de mantenimiento para poder
-                            vincular gastos.
-                          </p>
-                        ) : (
-                          <div className="mb-4 grid gap-2 sm:grid-cols-2">
-                            <label className="block sm:col-span-2">
-                              <span className="mb-1 block text-xs font-medium text-slate-600">Orden de mantenimiento</span>
-                              <select
-                                className={inputCls}
-                                value={mulitaMantNuevo.mantenimientoId}
-                                onChange={(e) =>
-                                  setMulitaMantNuevo((p) => ({ ...p, mantenimientoId: e.target.value }))
-                                }
-                              >
-                                <option value="">Selecciona…</option>
-                                {mulitaDrawerMantenimientos.map((m) => (
-                                  <option key={m.id} value={m.id}>
-                                    #{m.id} · {m.tipo} · {(m.descripcion || 'Sin descripción').slice(0, 48)}
-                                    {(m.descripcion || '').length > 48 ? '…' : ''}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="block">
-                              <span className="mb-1 block text-xs font-medium text-slate-600">Fecha</span>
-                              <input
-                                type="date"
-                                className={inputCls}
-                                value={mulitaMantNuevo.fecha}
-                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, fecha: e.target.value }))}
-                              />
-                            </label>
-                            <label className="block sm:col-span-2">
-                              <span className="mb-1 block text-xs font-medium text-slate-600">Concepto</span>
-                              <input
-                                type="text"
-                                className={inputCls}
-                                placeholder="Describe el gasto"
-                                value={mulitaMantNuevo.concepto}
-                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, concepto: e.target.value }))}
-                              />
-                            </label>
-                            <label className="block sm:col-span-2">
-                              <span className="mb-1 block text-xs font-medium text-slate-600">Cantidad (MXN)</span>
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                className={inputCls}
-                                placeholder="MXN"
-                                value={mulitaMantNuevo.cantidad}
-                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, cantidad: e.target.value }))}
-                              />
-                            </label>
-                            <div className="sm:col-span-2">
-                              <button
-                                type="button"
-                                className="btn btn-primary btn-sm"
-                                disabled={mulitaMantSaving || mulitaSavingId !== null}
-                                onClick={async () => {
-                                  if (mulitaMantSaving || mulitaSavingId) return;
-                                  const mid = mulitaMantNuevo.mantenimientoId;
-                                  const pm = parseMontoUnidadInput(mulitaMantNuevo.cantidad);
-                                  if (
-                                    !mid ||
-                                    !mulitaMantNuevo.fecha ||
-                                    !mulitaMantNuevo.concepto.trim() ||
-                                    !pm.ok ||
-                                    pm.value == null
-                                  ) {
-                                    toast('Elige mantenimiento, fecha, concepto e importe válido.', 'error');
-                                    return;
-                                  }
-                                  setMulitaMantSaving(true);
-                                  try {
-                                    await createMulitaGastoMantenimientoApi(u.id, {
-                                      mantenimientoId: mid,
-                                      fecha: mulitaMantNuevo.fecha,
-                                      concepto: mulitaMantNuevo.concepto.trim(),
-                                      cantidad: pm.value,
-                                    });
-                                    const rows = await getMulitaGastosMantenimientoUnidadApi(u.id);
-                                    setMulitaDrawerMantGastos(rows);
-                                    setMulitaMantNuevo({
-                                      mantenimientoId: '',
-                                      fecha: mulitaSemanaInicio,
-                                      concepto: '',
-                                      cantidad: '',
-                                    });
-                                    toast('Gasto vinculado a mantenimiento registrado.');
-                                  } catch (e) {
-                                    toast(e instanceof Error ? e.message : 'Error', 'error');
-                                  } finally {
-                                    setMulitaMantSaving(false);
-                                  }
-                                }}
-                              >
-                                {mulitaMantSaving ? 'Guardando…' : 'Añadir gasto'}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                        {mulitaDrawerMantGastos.length > 0 ? (
-                          <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 text-xs">
-                            {mulitaDrawerMantGastos.map((g) => (
-                              <li key={g.id} className="flex flex-wrap items-center justify-between gap-2 px-2 py-2">
-                                <div className="min-w-0">
-                                  <p className="font-medium text-slate-800">{g.concepto}</p>
-                                  <p className="text-slate-500">
-                                    {g.fecha} · Mtto #{g.mantenimientoId}
-                                    {g.mantenimientoTipo ? ` · ${g.mantenimientoTipo}` : ''}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold tabular-nums text-slate-900">
-                                    {textoMontoUnidadTabla(g.cantidad)}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="rounded border border-rose-200 px-1.5 py-0.5 text-[11px] font-medium text-rose-800 hover:bg-rose-50"
-                                    disabled={mulitaSavingId !== null}
-                                    onClick={async () => {
-                                      if (mulitaSavingId) return;
-                                      if (!window.confirm('¿Eliminar este gasto vinculado?')) return;
-                                      try {
-                                        await deleteMulitaGastoMantenimientoApi(u.id, g.id);
-                                        setMulitaDrawerMantGastos(await getMulitaGastosMantenimientoUnidadApi(u.id));
-                                        toast('Gasto eliminado.');
-                                      } catch (e) {
-                                        toast(e instanceof Error ? e.message : 'Error', 'error');
-                                      }
-                                    }}
-                                  >
-                                    Eliminar
-                                  </button>
-                                </div>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
                       </div>
 
                       <div className={secBox}>
@@ -2249,6 +2114,169 @@ export function Unidades() {
                             );
                           })}
                         </div>
+                      </div>
+
+                      <div className={secBox}>
+                        <div className={secTitle}>Gastos de mulita (mantenimiento)</div>
+                        <p className="mb-2 text-xs text-slate-500">
+                          Registra gastos por <strong className="font-medium text-slate-700">fecha</strong>,{' '}
+                          <strong className="font-medium text-slate-700">concepto</strong> e{' '}
+                          <strong className="font-medium text-slate-700">importe (MXN)</strong> vinculados a una orden de
+                          mantenimiento de esta unidad. Se reflejan en{' '}
+                          <strong className="font-medium text-slate-700">Finanzas → Gastos</strong> como movimientos de tipo
+                          «Gastos mulita vinculados a mantenimiento» y suman al total de mantenimiento.
+                        </p>
+                        <p className="mb-3 text-xs">
+                          <Link
+                            to="/finanzas/gastos?tipo=mulita_mantenimiento"
+                            className="font-medium text-skyline-blue underline decoration-skyline-blue/40 underline-offset-2 hover:decoration-skyline-blue"
+                          >
+                            Ver estos movimientos en Finanzas → Gastos
+                          </Link>
+                        </p>
+                        {mulitaDrawerAuxLoading ? (
+                          <p className="text-xs text-slate-500">Cargando…</p>
+                        ) : mulitaDrawerMantenimientos.length === 0 ? (
+                          <p className="text-xs text-amber-800">
+                            No hay órdenes de mantenimiento para esta unidad. Registra una en el módulo de mantenimiento para poder
+                            vincular gastos.
+                          </p>
+                        ) : (
+                          <div className="mb-4 grid gap-2 sm:grid-cols-2">
+                            <label className="block sm:col-span-2">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Orden de mantenimiento</span>
+                              <select
+                                className={inputCls}
+                                value={mulitaMantNuevo.mantenimientoId}
+                                onChange={(e) =>
+                                  setMulitaMantNuevo((p) => ({ ...p, mantenimientoId: e.target.value }))
+                                }
+                              >
+                                <option value="">Selecciona…</option>
+                                {mulitaDrawerMantenimientos.map((m) => (
+                                  <option key={m.id} value={m.id}>
+                                    #{m.id} · {m.tipo} · {(m.descripcion || 'Sin descripción').slice(0, 48)}
+                                    {(m.descripcion || '').length > 48 ? '…' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="block">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Fecha</span>
+                              <input
+                                type="date"
+                                className={inputCls}
+                                value={mulitaMantNuevo.fecha}
+                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, fecha: e.target.value }))}
+                              />
+                            </label>
+                            <label className="block sm:col-span-2">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Concepto</span>
+                              <input
+                                type="text"
+                                className={inputCls}
+                                placeholder="Describe el gasto"
+                                value={mulitaMantNuevo.concepto}
+                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, concepto: e.target.value }))}
+                              />
+                            </label>
+                            <label className="block sm:col-span-2">
+                              <span className="mb-1 block text-xs font-medium text-slate-600">Cantidad (MXN)</span>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                className={inputCls}
+                                placeholder="MXN"
+                                value={mulitaMantNuevo.cantidad}
+                                onChange={(e) => setMulitaMantNuevo((p) => ({ ...p, cantidad: e.target.value }))}
+                              />
+                            </label>
+                            <div className="sm:col-span-2">
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                disabled={mulitaMantSaving || mulitaSavingId !== null}
+                                onClick={async () => {
+                                  if (mulitaMantSaving || mulitaSavingId) return;
+                                  const mid = mulitaMantNuevo.mantenimientoId;
+                                  const pm = parseMontoUnidadInput(mulitaMantNuevo.cantidad);
+                                  if (
+                                    !mid ||
+                                    !mulitaMantNuevo.fecha ||
+                                    !mulitaMantNuevo.concepto.trim() ||
+                                    !pm.ok ||
+                                    pm.value == null
+                                  ) {
+                                    toast('Elige mantenimiento, fecha, concepto e importe válido.', 'error');
+                                    return;
+                                  }
+                                  setMulitaMantSaving(true);
+                                  try {
+                                    await createMulitaGastoMantenimientoApi(u.id, {
+                                      mantenimientoId: mid,
+                                      fecha: mulitaMantNuevo.fecha,
+                                      concepto: mulitaMantNuevo.concepto.trim(),
+                                      cantidad: pm.value,
+                                    });
+                                    const rows = await getMulitaGastosMantenimientoUnidadApi(u.id);
+                                    setMulitaDrawerMantGastos(rows);
+                                    setMulitaMantNuevo({
+                                      mantenimientoId: '',
+                                      fecha: mulitaSemanaInicio,
+                                      concepto: '',
+                                      cantidad: '',
+                                    });
+                                    toast('Gasto vinculado a mantenimiento registrado.');
+                                  } catch (e) {
+                                    toast(e instanceof Error ? e.message : 'Error', 'error');
+                                  } finally {
+                                    setMulitaMantSaving(false);
+                                  }
+                                }}
+                              >
+                                {mulitaMantSaving ? 'Guardando…' : 'Añadir gasto'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {mulitaDrawerMantGastos.length > 0 ? (
+                          <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 text-xs">
+                            {mulitaDrawerMantGastos.map((g) => (
+                              <li key={g.id} className="flex flex-wrap items-center justify-between gap-2 px-2 py-2">
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-800">{g.concepto}</p>
+                                  <p className="text-slate-500">
+                                    {g.fecha} · Mtto #{g.mantenimientoId}
+                                    {g.mantenimientoTipo ? ` · ${g.mantenimientoTipo}` : ''}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold tabular-nums text-slate-900">
+                                    {textoMontoUnidadTabla(g.cantidad)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="rounded border border-rose-200 px-1.5 py-0.5 text-[11px] font-medium text-rose-800 hover:bg-rose-50"
+                                    disabled={mulitaSavingId !== null}
+                                    onClick={async () => {
+                                      if (mulitaSavingId) return;
+                                      if (!window.confirm('¿Eliminar este gasto vinculado?')) return;
+                                      try {
+                                        await deleteMulitaGastoMantenimientoApi(u.id, g.id);
+                                        setMulitaDrawerMantGastos(await getMulitaGastosMantenimientoUnidadApi(u.id));
+                                        toast('Gasto eliminado.');
+                                      } catch (e) {
+                                        toast(e instanceof Error ? e.message : 'Error', 'error');
+                                      }
+                                    }}
+                                  >
+                                    Eliminar
+                                  </button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
                       </div>
 
                       <div className={secBox}>
