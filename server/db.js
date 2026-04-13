@@ -3030,7 +3030,7 @@ export function createCheckinOutRegistro(data, usuarioId = null) {
     rId = r.id;
   }
   const checklistJson = JSON.stringify(Array.isArray(checklist) ? checklist : []);
-  const modalidadesOk = ['caja_seca', 'refrigerado', 'mulita_patio'];
+  const modalidadesOk = ['caja_seca', 'refrigerado', 'mulita_patio', 'plataforma', 'dolly'];
   const modalidadVal = modalidadesOk.includes(String(modalidad)) ? String(modalidad) : 'caja_seca';
   let inspeccionJson = '{}';
   try {
@@ -3224,7 +3224,7 @@ export function updateCheckinOutRegistro(registroId, data, usuarioId = null) {
   }
 
   const checklistJson = JSON.stringify(Array.isArray(checklist) ? checklist : []);
-  const modalidadesOk = ['caja_seca', 'refrigerado', 'mulita_patio'];
+  const modalidadesOk = ['caja_seca', 'refrigerado', 'mulita_patio', 'plataforma', 'dolly'];
   const modalidadVal = modalidadesOk.includes(String(modalidad)) ? String(modalidad) : 'caja_seca';
   let inspeccionJson = '{}';
   try {

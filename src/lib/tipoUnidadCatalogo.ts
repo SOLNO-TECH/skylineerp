@@ -38,9 +38,11 @@ export function esTipoRefrigeradoCatalogo(v?: string | null): boolean {
 /** Sugerencia inicial de modalidad en check-in según catálogo. */
 export function sugerenciaModalidadCheckin(
   tipoUnidad?: string | null
-): 'caja_seca' | 'refrigerado' | 'mulita_patio' {
+): 'caja_seca' | 'refrigerado' | 'mulita_patio' | 'plataforma' | 'dolly' {
   if (esTipoRefrigeradoCatalogo(tipoUnidad)) return 'refrigerado';
   if (tipoUnidad === 'maquinaria') return 'mulita_patio';
+  if (tipoUnidad === 'plataforma') return 'plataforma';
+  if (tipoUnidad === 'dolly') return 'dolly';
   return 'caja_seca';
 }
 

@@ -43,12 +43,18 @@ import {
   MULITA_SECCIONES_HASTA_LLANTAS,
   MULITA_SECCIONES_TRAS_LLANTAS,
   REFRIGERACION_PRUEBA_IDS,
+  PLATAFORMA_DANOS_CARROCERIA,
+  PLATAFORMA_SECCIONES_REVISION,
+  DOLLY_DANOS_GENERALES,
+  DOLLY_SECCIONES_REVISION,
   defaultInspeccionCompleta,
   mergeInspeccionGuardada,
   defaultModalidadPorTipoUnidad,
   type InspeccionCompleta,
   type Tri,
   type MulitaSeccionDef,
+  type PlataformaRevisionKey,
+  type DollyRevisionKey,
 } from '../lib/checkinInspeccion';
 import { labelTipoUnidad, tipoUnidadSufijoOpcion } from '../lib/tipoUnidadCatalogo';
 import { etiquetaUnidadLista } from '../lib/unidadDisplay';
@@ -167,6 +173,8 @@ const MODALIDAD_BADGE: Record<CheckinOutModalidad, string> = {
   caja_seca: 'border-slate-200/80 bg-slate-100 text-slate-800',
   refrigerado: 'border-sky-200 bg-sky-100 text-sky-950',
   mulita_patio: 'border-amber-200 bg-amber-100 text-amber-950',
+  plataforma: 'border-violet-200 bg-violet-100 text-violet-950',
+  dolly: 'border-teal-200 bg-teal-100 text-teal-950',
 };
 
 function ModalidadPill({ m }: { m: CheckinOutModalidad }) {
@@ -252,6 +260,42 @@ function coincideBusquedaRegistro(r: CheckinOutRegistro, q: string): boolean {
   if (!t) return true;
   const hay = textoBusquedaRegistro(r);
   return t.split(/\s+/).every((p) => p.length > 0 && hay.includes(p));
+}
+
+/** Daños por zona (hojas plataforma / dolly): sin marcar o X = parte dañada. */
+function DanioXPick({ label, value, onChange }: { label: string; value: Tri; onChange: (v: Tri) => void }) {
+  const damaged = value === 'mal';
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100/80 py-2.5 last:border-b-0 even:bg-slate-50/40">
+      <span className="max-w-[min(100%,280px)] text-sm font-medium leading-snug text-slate-800">{label}</span>
+      <div className="flex shrink-0 gap-1" role="group" aria-label={`Daño: ${label}`}>
+        <button
+          type="button"
+          title="Sin marcar"
+          onClick={() => onChange('')}
+          className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+            !damaged
+              ? 'border-slate-400 bg-slate-700 text-white shadow-sm'
+              : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+          }`}
+        >
+          Sin marcar
+        </button>
+        <button
+          type="button"
+          title="Marcar daño (X)"
+          onClick={() => onChange('mal')}
+          className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+            damaged
+              ? 'border-rose-600 bg-rose-600 text-white shadow-sm'
+              : 'border-slate-200 bg-white text-slate-500 hover:border-rose-200 hover:text-rose-800'
+          }`}
+        >
+          X daño
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function TriPick({ label, value, onChange }: { label: string; value: Tri; onChange: (v: Tri) => void }) {
@@ -601,7 +645,57 @@ export function CheckInOut() {
       ? 'Caja seca (hoja SKYLINE): checklist completo, tabla de llantas y daños / croquis'
       : modalidad === 'refrigerado'
         ? 'Refrigerado: unidad de refrigeración, control de temperatura y prueba de funcionamiento'
-        : 'Mulita de patio: hoja de inspección (datos generales, quinta rueda, llantas, frenos, prueba operativa)';
+        : modalidad === 'mulita_patio'
+          ? 'Mulita de patio: hoja de inspección (datos generales, quinta rueda, llantas, frenos, prueba operativa)'
+          : modalidad === 'plataforma'
+            ? 'Plataforma: hoja de inspección (daños de carrocería, revisión general, llantas, rutina y observaciones)'
+            : 'Dolly: hoja de inspección (daños generales, revisión, cuatro llantas, rutina y observaciones)';
+
+  function setTriPlataforma(seccion: PlataformaRevisionKey, id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      plataforma: {
+        ...prev.plataforma,
+        [seccion]: {
+          ...(prev.plataforma[seccion] as Record<string, Tri>),
+          [id]: v,
+        },
+      },
+    }));
+  }
+
+  function setPlataformaDano(id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      plataforma: {
+        ...prev.plataforma,
+        danosCarroceria: { ...prev.plataforma.danosCarroceria, [id]: v },
+      },
+    }));
+  }
+
+  function setTriDolly(seccion: DollyRevisionKey, id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      dolly: {
+        ...prev.dolly,
+        [seccion]: {
+          ...(prev.dolly[seccion] as Record<string, Tri>),
+          [id]: v,
+        },
+      },
+    }));
+  }
+
+  function setDollyDano(id: string, v: Tri) {
+    setInspeccion((prev) => ({
+      ...prev,
+      dolly: {
+        ...prev.dolly,
+        danosGenerales: { ...prev.dolly.danosGenerales, [id]: v },
+      },
+    }));
+  }
 
   return (
     <div className="space-y-6">
@@ -614,7 +708,7 @@ export function CheckInOut() {
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Check-in / Check-out</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
             Registra recepción y entrega de unidades: colaborador, lecturas, hoja de inspección (caja seca,
-            refrigerado o mulita), evidencia en fotos o video y documentación entregada.
+            refrigerado, mulita, plataforma o dolly), evidencia en fotos o video y documentación entregada.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:items-stretch lg:flex-row">
@@ -1108,7 +1202,7 @@ export function CheckInOut() {
               <FormSection
                 step={2}
                 title="Encabezado de la hoja"
-                hint="Encabezado tipo hoja física. Con «Caja seca» aparecen también Placas, KM, Marca y Tipo del formato SKYLINE."
+                hint="Encabezado tipo hoja física. Con «Caja seca» o «Plataforma» aparecen también Placas, KM, Marca y Tipo del formato."
                 icon="mdi:file-document-edit-outline"
               >
               <div>
@@ -1125,7 +1219,7 @@ export function CheckInOut() {
                   ))}
                 </select>
                 <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  Elige la hoja que aplica. Los datos de las tres modalidades se conservan si cambias de opción.
+                  Elige la hoja que aplica. Los datos de cada modalidad se conservan si cambias de opción.
                 </p>
               </div>
 
@@ -1171,7 +1265,7 @@ export function CheckInOut() {
                       className="input w-full text-sm"
                     />
                   </div>
-                  {modalidad === 'caja_seca' && (
+                  {(modalidad === 'caja_seca' || modalidad === 'plataforma' || modalidad === 'dolly') && (
                     <>
                       <div>
                         <label className="mb-0.5 block text-xs font-medium text-gray-600">Placas (hoja)</label>
@@ -1214,48 +1308,59 @@ export function CheckInOut() {
                       </div>
                     </>
                   )}
-                  <div>
-                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Camión / tractor</label>
-                    <input
-                      type="text"
-                      value={inspeccion.header.camion}
-                      onChange={(e) => patchHeader({ camion: e.target.value })}
-                      className="input w-full text-sm"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="mb-0.5 block text-xs font-medium text-gray-600">
-                      Nivel combustible (E / ½ / F u otro)
-                    </label>
-                    <input
-                      type="text"
-                      value={inspeccion.header.nivelCombustibleEscala}
-                      onChange={(e) => patchHeader({ nivelCombustibleEscala: e.target.value })}
-                      className="input w-full text-sm"
-                      placeholder="Ej. ¾, mitad…"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="mb-0.5 block text-xs font-medium text-gray-600">
-                      Detalles a reparar / refacciones (hoja)
-                    </label>
-                    <textarea
-                      value={inspeccion.header.descripcionReparar}
-                      onChange={(e) => patchHeader({ descripcionReparar: e.target.value })}
-                      className="input min-h-[56px] w-full resize-y text-sm"
-                      rows={2}
-                      placeholder="Descripción previa de detalles a reparar"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="mb-0.5 block text-xs font-medium text-gray-600">Refacciones a utilizar</label>
-                    <textarea
-                      value={inspeccion.header.refacciones}
-                      onChange={(e) => patchHeader({ refacciones: e.target.value })}
-                      className="input min-h-[56px] w-full resize-y text-sm"
-                      rows={2}
-                    />
-                  </div>
+                  {modalidad !== 'dolly' && (
+                    <div>
+                      <label className="mb-0.5 block text-xs font-medium text-gray-600">
+                        {modalidad === 'plataforma' ? 'Tracto' : 'Camión / tractor'}
+                      </label>
+                      <input
+                        type="text"
+                        value={inspeccion.header.camion}
+                        onChange={(e) => patchHeader({ camion: e.target.value })}
+                        className="input w-full text-sm"
+                        placeholder={modalidad === 'plataforma' ? 'Identificación del tracto' : undefined}
+                      />
+                    </div>
+                  )}
+                  {modalidad !== 'plataforma' && modalidad !== 'dolly' && (
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-gray-600">
+                        Nivel combustible (E / ½ / F u otro)
+                      </label>
+                      <input
+                        type="text"
+                        value={inspeccion.header.nivelCombustibleEscala}
+                        onChange={(e) => patchHeader({ nivelCombustibleEscala: e.target.value })}
+                        className="input w-full text-sm"
+                        placeholder="Ej. ¾, mitad…"
+                      />
+                    </div>
+                  )}
+                  {modalidad !== 'plataforma' && modalidad !== 'dolly' && (
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-gray-600">
+                        Detalles a reparar / refacciones (hoja)
+                      </label>
+                      <textarea
+                        value={inspeccion.header.descripcionReparar}
+                        onChange={(e) => patchHeader({ descripcionReparar: e.target.value })}
+                        className="input min-h-[56px] w-full resize-y text-sm"
+                        rows={2}
+                        placeholder="Descripción previa de detalles a reparar"
+                      />
+                    </div>
+                  )}
+                  {modalidad !== 'plataforma' && modalidad !== 'dolly' && (
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-gray-600">Refacciones a utilizar</label>
+                      <textarea
+                        value={inspeccion.header.refacciones}
+                        onChange={(e) => patchHeader({ refacciones: e.target.value })}
+                        className="input min-h-[56px] w-full resize-y text-sm"
+                        rows={2}
+                      />
+                    </div>
+                  )}
                   <div>
                     <label className="mb-0.5 block text-xs font-medium text-gray-600">Mecánico asignado</label>
                     <input
@@ -1902,6 +2007,263 @@ export function CheckInOut() {
                     </div>
                   </div>
                   <div className="grid gap-3 lg:grid-cols-2">{renderMulitaSecciones(MULITA_SECCIONES_TRAS_LLANTAS)}</div>
+                </div>
+              )}
+
+              {modalidad === 'plataforma' && (
+                <div className="space-y-5">
+                  <div className="rounded-xl border border-violet-100 bg-violet-50/50 px-3 py-3 sm:px-4">
+                    <h4 className="text-sm font-bold tracking-tight text-slate-900">
+                      Hoja de inspección — Plataforma
+                    </h4>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                      Marque con <strong className="text-rose-700">X</strong> las partes dañadas en carrocería. En revisión
+                      general use <strong>Bien</strong> (✓), <strong>Mal</strong> (X) o <strong>N/A</strong> según corresponda.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+                    <p className="mb-2 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-violet-800">
+                      Daños de carrocería
+                    </p>
+                    <p className="mb-3 text-[11px] text-slate-500">Marque con una X las partes dañadas.</p>
+                    <div className="max-h-72 overflow-y-auto pr-1">
+                      {PLATAFORMA_DANOS_CARROCERIA.map((it) => (
+                        <DanioXPick
+                          key={it.id}
+                          label={it.label}
+                          value={inspeccion.plataforma.danosCarroceria[it.id] ?? ''}
+                          onChange={(v) => setPlataformaDano(it.id, v)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {PLATAFORMA_SECCIONES_REVISION.map((sec) => (
+                      <div
+                        key={sec.key}
+                        className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-900/[0.03]"
+                      >
+                        <p className="mb-2 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-skyline-blue">
+                          {sec.titulo}
+                        </p>
+                        <p className="mb-2 text-[11px] text-slate-500">
+                          Marque X si está en mal estado y ✓ si está en buen estado (o N/A).
+                        </p>
+                        <div className="max-h-80 overflow-y-auto pr-1">
+                          {sec.items.map((it) => (
+                            <TriPick
+                              key={it.id}
+                              label={it.label}
+                              value={(inspeccion.plataforma[sec.key] as Record<string, Tri>)[it.id] ?? ''}
+                              onChange={(v) => setTriPlataforma(sec.key, it.id, v)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-gray-800">Llantas</p>
+                    <div className="overflow-x-auto rounded-lg border border-skyline-border">
+                      <table className="w-full min-w-[720px] text-left text-xs">
+                        <thead className="bg-skyline-bg font-semibold text-gray-600">
+                          <tr>
+                            <th className="px-2 py-1.5">No.</th>
+                            <th className="px-2 py-1.5">Posición</th>
+                            <th className="px-2 py-1.5">Marca</th>
+                            <th className="px-2 py-1.5">Medida</th>
+                            <th className="px-2 py-1.5">Estado</th>
+                            <th className="px-2 py-1.5">Sellos</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-skyline-border">
+                          {inspeccion.plataforma.llantas.map((row, i) => (
+                            <tr key={i}>
+                              <td className="px-2 py-1 text-gray-500">{i + 1}</td>
+                              {(['posicion', 'marca', 'medida', 'estado', 'sellos'] as const).map((field) => (
+                                <td key={field} className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row[field]}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.plataforma.llantas];
+                                        ll[i] = { ...ll[i], [field]: e.target.value };
+                                        return { ...p, plataforma: { ...p.plataforma, llantas: ll } };
+                                      })
+                                    }
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Descripción de daños detectados
+                    </label>
+                    <textarea
+                      value={inspeccion.plataforma.descripcionDanos}
+                      onChange={(e) =>
+                        setInspeccion((p) => ({
+                          ...p,
+                          plataforma: { ...p.plataforma, descripcionDanos: e.target.value },
+                        }))
+                      }
+                      className="input min-h-[72px] w-full resize-y text-sm"
+                      rows={3}
+                      placeholder="Detalle de golpes, fisuras, corrosión…"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Observaciones generales</label>
+                    <textarea
+                      value={inspeccion.plataforma.observacionesGenerales}
+                      onChange={(e) =>
+                        setInspeccion((p) => ({
+                          ...p,
+                          plataforma: { ...p.plataforma, observacionesGenerales: e.target.value },
+                        }))
+                      }
+                      className="input min-h-[72px] w-full resize-y text-sm"
+                      rows={3}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {modalidad === 'dolly' && (
+                <div className="space-y-5">
+                  <div className="rounded-xl border border-teal-100 bg-teal-50/50 px-3 py-3 sm:px-4">
+                    <h4 className="text-sm font-bold tracking-tight text-slate-900">Hoja de inspección — Dolly</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                      Marque con <strong className="text-rose-700">X</strong> las partes dañadas en daños generales. En
+                      revisión general use <strong>Bien</strong> (✓), <strong>Mal</strong> (X) o <strong>N/A</strong> según
+                      corresponda.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+                    <p className="mb-2 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-teal-800">
+                      Daños generales
+                    </p>
+                    <p className="mb-3 text-[11px] text-slate-500">Marque con una X las partes dañadas.</p>
+                    <div className="max-h-72 overflow-y-auto pr-1">
+                      {DOLLY_DANOS_GENERALES.map((it) => (
+                        <DanioXPick
+                          key={it.id}
+                          label={it.label}
+                          value={inspeccion.dolly.danosGenerales[it.id] ?? ''}
+                          onChange={(v) => setDollyDano(it.id, v)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {DOLLY_SECCIONES_REVISION.map((sec) => (
+                      <div
+                        key={sec.key}
+                        className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-900/[0.03]"
+                      >
+                        <p className="mb-2 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-skyline-blue">
+                          {sec.titulo}
+                        </p>
+                        <p className="mb-2 text-[11px] text-slate-500">
+                          Marque X si está en mal estado y ✓ si está en buen estado (o N/A).
+                        </p>
+                        <div className="max-h-80 overflow-y-auto pr-1">
+                          {sec.items.map((it) => (
+                            <TriPick
+                              key={it.id}
+                              label={it.label}
+                              value={(inspeccion.dolly[sec.key] as Record<string, Tri>)[it.id] ?? ''}
+                              onChange={(v) => setTriDolly(sec.key, it.id, v)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-gray-800">Llantas</p>
+                    <div className="overflow-x-auto rounded-lg border border-skyline-border">
+                      <table className="w-full min-w-[720px] text-left text-xs">
+                        <thead className="bg-skyline-bg font-semibold text-gray-600">
+                          <tr>
+                            <th className="px-2 py-1.5">No.</th>
+                            <th className="px-2 py-1.5">Posición</th>
+                            <th className="px-2 py-1.5">Marca</th>
+                            <th className="px-2 py-1.5">Medida</th>
+                            <th className="px-2 py-1.5">Estado</th>
+                            <th className="px-2 py-1.5">Sellos</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-skyline-border">
+                          {inspeccion.dolly.llantas.map((row, i) => (
+                            <tr key={i}>
+                              <td className="px-2 py-1 text-gray-500">{i + 1}</td>
+                              {(['posicion', 'marca', 'medida', 'estado', 'sellos'] as const).map((field) => (
+                                <td key={field} className="px-1 py-0.5">
+                                  <input
+                                    className="input w-full py-1 text-xs"
+                                    value={row[field]}
+                                    onChange={(e) =>
+                                      setInspeccion((p) => {
+                                        const ll = [...p.dolly.llantas];
+                                        ll[i] = { ...ll[i], [field]: e.target.value };
+                                        return { ...p, dolly: { ...p.dolly, llantas: ll } };
+                                      })
+                                    }
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Descripción de daños detectados
+                    </label>
+                    <textarea
+                      value={inspeccion.dolly.descripcionDanos}
+                      onChange={(e) =>
+                        setInspeccion((p) => ({
+                          ...p,
+                          dolly: { ...p.dolly, descripcionDanos: e.target.value },
+                        }))
+                      }
+                      className="input min-h-[72px] w-full resize-y text-sm"
+                      rows={3}
+                      placeholder="Detalle de daños o fallas…"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">Observaciones generales</label>
+                    <textarea
+                      value={inspeccion.dolly.observacionesGenerales}
+                      onChange={(e) =>
+                        setInspeccion((p) => ({
+                          ...p,
+                          dolly: { ...p.dolly, observacionesGenerales: e.target.value },
+                        }))
+                      }
+                      className="input min-h-[72px] w-full resize-y text-sm"
+                      rows={3}
+                    />
+                  </div>
                 </div>
               )}
               </FormSection>

@@ -1603,7 +1603,7 @@ export async function updateMantenimiento(
 /* ─── Check-in / Check-out ─── */
 export type ChecklistItemPayload = { id: string; label: string; presente: boolean };
 
-export type CheckinOutModalidad = 'caja_seca' | 'refrigerado' | 'mulita_patio';
+export type CheckinOutModalidad = 'caja_seca' | 'refrigerado' | 'mulita_patio' | 'plataforma' | 'dolly';
 
 export type CheckinOutImagen = {
   id: string;

@@ -3,12 +3,14 @@ import { sugerenciaModalidadCheckin } from './tipoUnidadCatalogo';
 /** Estados tipo hoja física: ✔ / X / N/A */
 export type Tri = '' | 'ok' | 'mal' | 'na';
 
-export type ModalidadInspeccion = 'caja_seca' | 'refrigerado' | 'mulita_patio';
+export type ModalidadInspeccion = 'caja_seca' | 'refrigerado' | 'mulita_patio' | 'plataforma' | 'dolly';
 
 export const MODALIDAD_LABEL: Record<ModalidadInspeccion, string> = {
   caja_seca: 'Caja seca (remolque)',
   refrigerado: 'Refrigerado',
   mulita_patio: 'Mulita de patio',
+  plataforma: 'Hoja de inspección – Plataforma',
+  dolly: 'Hoja de inspección – Dolly',
 };
 
 export type InspeccionHeader = {
@@ -93,11 +95,347 @@ export type InspeccionMulita = {
   llantas: Array<{ posicion: string; estado: string; presion: string; danos: string }>;
 };
 
+/** Fila de llantas en hoja plataforma (No., posición, marca, medida, estado, sellos). */
+export type PlataformaLlantaFila = {
+  posicion: string;
+  marca: string;
+  medida: string;
+  estado: string;
+  sellos: string;
+};
+
+/** HOJA DE INSPECCIÓN – PLATAFORMA: marcar (X) zonas dañadas en carrocería. */
+export const PLATAFORMA_DANOS_CARROCERIA: { id: string; label: string }[] = [
+  { id: 'plt_dan_frente', label: 'Frente' },
+  { id: 'plt_dan_tras', label: 'Parte trasera' },
+  { id: 'plt_dan_lizq', label: 'Lado izquierdo' },
+  { id: 'plt_dan_lder', label: 'Lado derecho' },
+  { id: 'plt_dan_piso', label: 'Piso de plataforma' },
+  { id: 'plt_dan_cuellos', label: 'Cuellos / estructura principal' },
+  { id: 'plt_dan_laterales', label: 'Laterales / bordes' },
+];
+
+export type PlataformaRevisionKey =
+  | 'estructura'
+  | 'sistemaAmarre'
+  | 'suspension'
+  | 'frenos'
+  | 'areaInferior'
+  | 'chequeoRutina'
+  | 'filtracionesDanos';
+
+export const PLATAFORMA_SECCIONES_REVISION: {
+  key: PlataformaRevisionKey;
+  titulo: string;
+  items: { id: string; label: string }[];
+}[] = [
+  {
+    key: 'estructura',
+    titulo: 'Estructura',
+    items: [
+      { id: 'plt_est_largueros', label: 'Largueros' },
+      { id: 'plt_est_travies', label: 'Travesaños' },
+      { id: 'plt_est_cuello', label: 'Cuello de ganso' },
+      { id: 'plt_est_piso', label: 'Piso (madera / acero)' },
+      { id: 'plt_est_bordes', label: 'Bordes laterales' },
+      { id: 'plt_est_soldaduras', label: 'Soldaduras' },
+    ],
+  },
+  {
+    key: 'sistemaAmarre',
+    titulo: 'Sistema de amarre',
+    items: [
+      { id: 'plt_am_winches', label: 'Winches' },
+      { id: 'plt_am_cintas', label: 'Cintas' },
+      { id: 'plt_am_matracas', label: 'Matracas' },
+      { id: 'plt_am_ganchos', label: 'Ganchos' },
+      { id: 'plt_am_anillos', label: 'Anillos «D»' },
+    ],
+  },
+  {
+    key: 'suspension',
+    titulo: 'Suspensión',
+    items: [
+      { id: 'plt_sus_muelles', label: 'Muelles / bolsas de aire' },
+      { id: 'plt_sus_amort', label: 'Amortiguadores' },
+      { id: 'plt_sus_ejes', label: 'Ejes' },
+      { id: 'plt_sus_abs', label: 'Sistema ABS' },
+      { id: 'plt_sus_mangueras', label: 'Mangueras de aire' },
+    ],
+  },
+  {
+    key: 'frenos',
+    titulo: 'Sistema de frenos',
+    items: [
+      { id: 'plt_fr_balatas', label: 'Balatas' },
+      { id: 'plt_fr_tambores', label: 'Tambores / discos' },
+      { id: 'plt_fr_lineas', label: 'Líneas de aire' },
+      { id: 'plt_fr_valvulas', label: 'Válvulas' },
+    ],
+  },
+  {
+    key: 'areaInferior',
+    titulo: 'Área inferior',
+    items: [
+      { id: 'plt_inf_patines', label: 'Patines' },
+      { id: 'plt_inf_manivelas', label: 'Manivelas' },
+      { id: 'plt_inf_pernos', label: 'Pernos rey' },
+      { id: 'plt_inf_soportes', label: 'Soportes' },
+      { id: 'plt_inf_base', label: 'Base estructural' },
+    ],
+  },
+  {
+    key: 'chequeoRutina',
+    titulo: 'Chequeo de rutina importante',
+    items: [
+      { id: 'plt_rut_luces_tras', label: 'Luces traseras' },
+      { id: 'plt_rut_luces_lat', label: 'Luces laterales' },
+      { id: 'plt_rut_luces_freno', label: 'Luces de freno' },
+      { id: 'plt_rut_refl', label: 'Reflejantes' },
+      { id: 'plt_rut_placa', label: 'Placa' },
+      { id: 'plt_rut_porta', label: 'Porta placa' },
+      { id: 'plt_rut_topes', label: 'Topes' },
+      { id: 'plt_rut_conexion', label: 'Conexiones eléctricas' },
+      { id: 'plt_rut_mangueras', label: 'Mangueras de aire' },
+    ],
+  },
+  {
+    key: 'filtracionesDanos',
+    titulo: 'Condiciones generales — filtraciones / daños',
+    items: [
+      { id: 'plt_fil_piso', label: 'Piso' },
+      { id: 'plt_fil_estructura', label: 'Estructura' },
+      { id: 'plt_fil_soldaduras', label: 'Soldaduras' },
+    ],
+  },
+];
+
+export type InspeccionPlataforma = {
+  danosCarroceria: Record<string, Tri>;
+  estructura: Record<string, Tri>;
+  sistemaAmarre: Record<string, Tri>;
+  suspension: Record<string, Tri>;
+  frenos: Record<string, Tri>;
+  areaInferior: Record<string, Tri>;
+  chequeoRutina: Record<string, Tri>;
+  filtracionesDanos: Record<string, Tri>;
+  llantas: PlataformaLlantaFila[];
+  descripcionDanos: string;
+  observacionesGenerales: string;
+};
+
+function emptyPlataformaLlantas(): PlataformaLlantaFila[] {
+  return Array.from({ length: 8 }, () => ({
+    posicion: '',
+    marca: '',
+    medida: '',
+    estado: '',
+    sellos: '',
+  }));
+}
+
+function defaultPlataformaInspeccion(): InspeccionPlataforma {
+  const danosCarroceria = triRecord(PLATAFORMA_DANOS_CARROCERIA.map((x) => x.id));
+  const secciones: Pick<
+    InspeccionPlataforma,
+    | 'estructura'
+    | 'sistemaAmarre'
+    | 'suspension'
+    | 'frenos'
+    | 'areaInferior'
+    | 'chequeoRutina'
+    | 'filtracionesDanos'
+  > = {
+    estructura: {},
+    sistemaAmarre: {},
+    suspension: {},
+    frenos: {},
+    areaInferior: {},
+    chequeoRutina: {},
+    filtracionesDanos: {},
+  };
+  for (const sec of PLATAFORMA_SECCIONES_REVISION) {
+    const bucket = secciones[sec.key] as Record<string, Tri>;
+    for (const it of sec.items) bucket[it.id] = '';
+  }
+  return {
+    danosCarroceria,
+    ...secciones,
+    llantas: emptyPlataformaLlantas(),
+    descripcionDanos: '',
+    observacionesGenerales: '',
+  };
+}
+
+/** HOJA DE INSPECCIÓN – DOLLY: marcar (X) partes dañadas (daños generales). */
+export const DOLLY_DANOS_GENERALES: { id: string; label: string }[] = [
+  { id: 'dly_dan_estructura', label: 'Estructura principal' },
+  { id: 'dly_dan_lanza', label: 'Lanza / barra de tiro' },
+  { id: 'dly_dan_quinta', label: 'Quinta rueda' },
+  { id: 'dly_dan_base', label: 'Base del dolly' },
+  { id: 'dly_dan_soportes', label: 'Soportes' },
+  { id: 'dly_dan_guardafangos', label: 'Guardafangos' },
+];
+
+export type DollyRevisionKey =
+  | 'estructura'
+  | 'sistemaAcople'
+  | 'suspension'
+  | 'frenos'
+  | 'areaInferior'
+  | 'chequeoRutina'
+  | 'condicionesGenerales';
+
+export const DOLLY_SECCIONES_REVISION: {
+  key: DollyRevisionKey;
+  titulo: string;
+  items: { id: string; label: string }[];
+}[] = [
+  {
+    key: 'estructura',
+    titulo: 'Estructura',
+    items: [
+      { id: 'dly_est_bastidor', label: 'Bastidor' },
+      { id: 'dly_est_largueros', label: 'Largueros' },
+      { id: 'dly_est_travies', label: 'Travesaños' },
+      { id: 'dly_est_soldaduras', label: 'Soldaduras' },
+      { id: 'dly_est_soportes', label: 'Soportes' },
+    ],
+  },
+  {
+    key: 'sistemaAcople',
+    titulo: 'Sistema de acople',
+    items: [
+      { id: 'dly_ac_lanza', label: 'Lanza (barra de tiro)' },
+      { id: 'dly_ac_ojo', label: 'Ojo de enganche' },
+      { id: 'dly_ac_quinta', label: 'Quinta rueda' },
+      { id: 'dly_ac_seguro', label: 'Seguro de quinta rueda' },
+      { id: 'dly_ac_perno', label: 'Perno rey' },
+    ],
+  },
+  {
+    key: 'suspension',
+    titulo: 'Suspensión',
+    items: [
+      { id: 'dly_sus_muelles', label: 'Muelles / bolsas de aire' },
+      { id: 'dly_sus_amort', label: 'Amortiguadores' },
+      { id: 'dly_sus_ejes', label: 'Ejes' },
+      { id: 'dly_sus_abs', label: 'Sistema ABS' },
+      { id: 'dly_sus_mangueras', label: 'Mangueras' },
+    ],
+  },
+  {
+    key: 'frenos',
+    titulo: 'Sistema de frenos',
+    items: [
+      { id: 'dly_fr_balatas', label: 'Balatas' },
+      { id: 'dly_fr_tambores', label: 'Tambores / discos' },
+      { id: 'dly_fr_lineas', label: 'Líneas de aire' },
+      { id: 'dly_fr_valvulas', label: 'Válvulas' },
+    ],
+  },
+  {
+    key: 'areaInferior',
+    titulo: 'Área inferior',
+    items: [
+      { id: 'dly_inf_patines', label: 'Patines (si aplica)' },
+      { id: 'dly_inf_base', label: 'Base estructural' },
+      { id: 'dly_inf_soportes', label: 'Soportes' },
+      { id: 'dly_inf_pernos', label: 'Pernos' },
+      { id: 'dly_inf_conexiones', label: 'Conexiones' },
+    ],
+  },
+  {
+    key: 'chequeoRutina',
+    titulo: 'Chequeo de rutina importante',
+    items: [
+      { id: 'dly_rut_luces_tras', label: 'Luces traseras' },
+      { id: 'dly_rut_luces_lat', label: 'Luces laterales' },
+      { id: 'dly_rut_luces_freno', label: 'Luces de freno' },
+      { id: 'dly_rut_refl', label: 'Reflejantes' },
+      { id: 'dly_rut_placa', label: 'Placa' },
+      { id: 'dly_rut_porta', label: 'Porta placa' },
+      { id: 'dly_rut_conexion', label: 'Conexiones eléctricas' },
+      { id: 'dly_rut_mangueras', label: 'Mangueras de aire' },
+      { id: 'dly_rut_cables', label: 'Cables de seguridad' },
+    ],
+  },
+  {
+    key: 'condicionesGenerales',
+    titulo: 'Condiciones generales — revisión de daños o fallas',
+    items: [
+      { id: 'dly_cond_estructura', label: 'Estructura' },
+      { id: 'dly_cond_quinta', label: 'Quinta rueda' },
+      { id: 'dly_cond_lanza', label: 'Lanza' },
+      { id: 'dly_cond_frenos', label: 'Sistema de frenos' },
+    ],
+  },
+];
+
+export type InspeccionDolly = {
+  danosGenerales: Record<string, Tri>;
+  estructura: Record<string, Tri>;
+  sistemaAcople: Record<string, Tri>;
+  suspension: Record<string, Tri>;
+  frenos: Record<string, Tri>;
+  areaInferior: Record<string, Tri>;
+  chequeoRutina: Record<string, Tri>;
+  condicionesGenerales: Record<string, Tri>;
+  llantas: PlataformaLlantaFila[];
+  descripcionDanos: string;
+  observacionesGenerales: string;
+};
+
+function emptyDollyLlantas(): PlataformaLlantaFila[] {
+  return Array.from({ length: 4 }, () => ({
+    posicion: '',
+    marca: '',
+    medida: '',
+    estado: '',
+    sellos: '',
+  }));
+}
+
+function defaultDollyInspeccion(): InspeccionDolly {
+  const danosGenerales = triRecord(DOLLY_DANOS_GENERALES.map((x) => x.id));
+  const secciones: Pick<
+    InspeccionDolly,
+    | 'estructura'
+    | 'sistemaAcople'
+    | 'suspension'
+    | 'frenos'
+    | 'areaInferior'
+    | 'chequeoRutina'
+    | 'condicionesGenerales'
+  > = {
+    estructura: {},
+    sistemaAcople: {},
+    suspension: {},
+    frenos: {},
+    areaInferior: {},
+    chequeoRutina: {},
+    condicionesGenerales: {},
+  };
+  for (const sec of DOLLY_SECCIONES_REVISION) {
+    const bucket = secciones[sec.key] as Record<string, Tri>;
+    for (const it of sec.items) bucket[it.id] = '';
+  }
+  return {
+    danosGenerales,
+    ...secciones,
+    llantas: emptyDollyLlantas(),
+    descripcionDanos: '',
+    observacionesGenerales: '',
+  };
+}
+
 export type InspeccionCompleta = {
   header: InspeccionHeader;
   cajaSeca: InspeccionCajaSeca;
   refrigeracion: InspeccionRefrigeracion;
   mulita: InspeccionMulita;
+  plataforma: InspeccionPlataforma;
+  dolly: InspeccionDolly;
 };
 
 /** Checklist alineado con la hoja física SKYLINE · caja seca (✔ / X / N/A). */
@@ -466,6 +804,8 @@ export function defaultInspeccionCompleta(): InspeccionCompleta {
       items: triRecord(collectMulitaIds()),
       llantas: emptyMulitaLlantas(),
     },
+    plataforma: defaultPlataformaInspeccion(),
+    dolly: defaultDollyInspeccion(),
   };
 }
 
@@ -514,6 +854,50 @@ export function mergeInspeccionGuardada(raw: unknown): InspeccionCompleta {
           ? o.mulita.llantas.map((r, i) => ({ ...base.mulita.llantas[i], ...r }))
           : base.mulita.llantas,
     },
+    plataforma: (() => {
+      const bp = base.plataforma;
+      const op = o.plataforma;
+      if (!op || typeof op !== 'object') return bp;
+      const p = op as Partial<InspeccionPlataforma>;
+      return {
+        danosCarroceria: { ...bp.danosCarroceria, ...(p.danosCarroceria || {}) },
+        estructura: { ...bp.estructura, ...(p.estructura || {}) },
+        sistemaAmarre: { ...bp.sistemaAmarre, ...(p.sistemaAmarre || {}) },
+        suspension: { ...bp.suspension, ...(p.suspension || {}) },
+        frenos: { ...bp.frenos, ...(p.frenos || {}) },
+        areaInferior: { ...bp.areaInferior, ...(p.areaInferior || {}) },
+        chequeoRutina: { ...bp.chequeoRutina, ...(p.chequeoRutina || {}) },
+        filtracionesDanos: { ...bp.filtracionesDanos, ...(p.filtracionesDanos || {}) },
+        llantas:
+          Array.isArray(p.llantas) && p.llantas.length === bp.llantas.length
+            ? p.llantas.map((r, i) => ({ ...bp.llantas[i], ...r }))
+            : bp.llantas,
+        descripcionDanos: p.descripcionDanos ?? bp.descripcionDanos,
+        observacionesGenerales: p.observacionesGenerales ?? bp.observacionesGenerales,
+      };
+    })(),
+    dolly: (() => {
+      const bd = base.dolly;
+      const od = o.dolly;
+      if (!od || typeof od !== 'object') return bd;
+      const d = od as Partial<InspeccionDolly>;
+      return {
+        danosGenerales: { ...bd.danosGenerales, ...(d.danosGenerales || {}) },
+        estructura: { ...bd.estructura, ...(d.estructura || {}) },
+        sistemaAcople: { ...bd.sistemaAcople, ...(d.sistemaAcople || {}) },
+        suspension: { ...bd.suspension, ...(d.suspension || {}) },
+        frenos: { ...bd.frenos, ...(d.frenos || {}) },
+        areaInferior: { ...bd.areaInferior, ...(d.areaInferior || {}) },
+        chequeoRutina: { ...bd.chequeoRutina, ...(d.chequeoRutina || {}) },
+        condicionesGenerales: { ...bd.condicionesGenerales, ...(d.condicionesGenerales || {}) },
+        llantas:
+          Array.isArray(d.llantas) && d.llantas.length === bd.llantas.length
+            ? d.llantas.map((r, i) => ({ ...bd.llantas[i], ...r }))
+            : bd.llantas,
+        descripcionDanos: d.descripcionDanos ?? bd.descripcionDanos,
+        observacionesGenerales: d.observacionesGenerales ?? bd.observacionesGenerales,
+      };
+    })(),
   };
 }
 
